@@ -1,0 +1,152 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="320dp"
+    android:height="220dp"
+    android:viewportWidth="320"
+    android:viewportHeight="220">
+
+    <!-- Background Pink Blob -->
+    <path
+        android:fillColor="#FFF0F3"
+        android:pathData="M 40,110 C 20,40 100,10 180,15 C 250,20 290,60 280,120 C 270,180 160,195 90,180 C 40,170 60,140 40,110 Z" />
+
+    <!-- Floor Shadow Ellipse -->
+    <path
+        android:fillColor="#FFE2E8"
+        android:pathData="M 60,145 C 60,134 105,125 160,125 C 215,125 260,134 260,145 C 260,156 215,165 160,165 C 105,165 60,156 60,145 Z" />
+
+    <!-- Sparkle Rays around Heart -->
+    <path
+        android:strokeColor="#FFB3C1"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:pathData="M 160,34 L 160,24" />
+    <path
+        android:strokeColor="#FFB3C1"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:pathData="M 142,38 L 132,28" />
+    <path
+        android:strokeColor="#FFB3C1"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:pathData="M 178,38 L 188,28" />
+    <path
+        android:strokeColor="#FFB3C1"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:pathData="M 134,54 L 122,54" />
+    <path
+        android:strokeColor="#FFB3C1"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:pathData="M 186,54 L 198,54" />
+    <path
+        android:strokeColor="#FFB3C1"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:pathData="M 142,70 L 132,80" />
+    <path
+        android:strokeColor="#FFB3C1"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:pathData="M 178,70 L 188,80" />
+
+    <!-- Pink Heart -->
+    <path
+        android:fillColor="#FF7B93"
+        android:pathData="M 160,58 C 154,50 142,50 136,58 C 130,66 136,76 160,90 C 184,76 190,66 184,58 C 178,50 166,50 160,58 Z" />
+
+    <!-- Cat Tail -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:strokeColor="#2B283A"
+        android:strokeWidth="3.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M 210,135 C 245,130 250,95 228,85 C 212,78 206,95 218,108 C 228,118 210,135 210,135 Z" />
+
+    <!-- Cat Body -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:strokeColor="#2B283A"
+        android:strokeWidth="3.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M 138,138 C 155,75 225,80 220,138 Z" />
+
+    <!-- Back Gray Patch -->
+    <path
+        android:fillColor="#E2E2E8"
+        android:pathData="M 180,84 C 210,86 218,105 198,115 C 180,118 175,98 180,84 Z" />
+
+    <!-- Inner Ears -->
+    <path
+        android:fillColor="#FFB3C1"
+        android:pathData="M 107,93 L 117,60 L 128,78 Z" />
+    <path
+        android:fillColor="#FFB3C1"
+        android:pathData="M 152,78 L 166,60 L 175,93 Z" />
+
+    <!-- Cat Head -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:strokeColor="#2B283A"
+        android:strokeWidth="3.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M 100,100 L 115,50 L 132,78 C 145,72 158,78 168,50 L 182,100 C 188,128 92,128 100,100 Z" />
+
+    <!-- Forehead Gray Patch -->
+    <path
+        android:fillColor="#E2E2E8"
+        android:pathData="M 132,78 C 145,72 158,78 152,95 C 135,98 128,88 132,78 Z" />
+
+    <!-- Cheek Rosy Circles -->
+    <path
+        android:fillColor="#FFB7C5"
+        android:fillAlpha="0.75"
+        android:pathData="M 114,108 A 8,8 0 1,0 130,108 A 8,8 0 1,0 114,108 Z" />
+    <path
+        android:fillColor="#FFB7C5"
+        android:fillAlpha="0.75"
+        android:pathData="M 160,108 A 8,8 0 1,0 176,108 A 8,8 0 1,0 160,108 Z" />
+
+    <!-- Sleeping Eyes (^ ^) -->
+    <path
+        android:strokeColor="#2B283A"
+        android:strokeWidth="3.5"
+        android:strokeLineCap="round"
+        android:pathData="M 124,98 C 128,90 136,90 140,98" />
+    <path
+        android:strokeColor="#2B283A"
+        android:strokeWidth="3.5"
+        android:strokeLineCap="round"
+        android:pathData="M 150,98 C 154,90 162,90 166,98" />
+
+    <!-- Nose -->
+    <path
+        android:fillColor="#FF7B93"
+        android:pathData="M 142,104 L 148,104 L 145,108 Z" />
+
+    <!-- Mouth -->
+    <path
+        android:strokeColor="#2B283A"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:pathData="M 145,108 C 141,113 137,112 135,109" />
+    <path
+        android:strokeColor="#2B283A"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:pathData="M 145,108 C 149,113 153,112 155,109" />
+
+    <!-- Front Paw -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:strokeColor="#2B283A"
+        android:strokeWidth="3.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M 102,122 C 95,138 120,138 124,122 Z" />
+
+</vector>
