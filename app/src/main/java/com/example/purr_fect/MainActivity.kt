@@ -52,6 +52,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -856,9 +857,26 @@ private object PurrFectApi {
                 for (index in 0 until messages.length()) {
                     val msg = messages.optJSONObject(index) ?: continue
                     val senderId = msg.optInt("sender_cat_id", 0)
+                    val rawMessage = msg.optString("message", "")
+                    if (rawMessage.startsWith("[[FILE|") && rawMessage.endsWith("]]")) {
+                        val payload = rawMessage.removePrefix("[[FILE|").removeSuffix("]]" ).split("|", limit = 4)
+                        if (payload.size == 3) {
+                            add(
+                                ChatMessage(
+                                    text = payload[0],
+                                    isMine = senderId == currentCatId,
+                                    time = msg.optString("created_at", ""),
+                                    attachmentName = payload[0],
+                                    attachmentMime = payload[1],
+                                    attachmentUrl = payload[2]
+                                )
+                            )
+                            continue
+                        }
+                    }
                     add(
                         ChatMessage(
-                            text = msg.optString("message", ""),
+                            text = rawMessage,
                             isMine = senderId == currentCatId,
                             time = msg.optString("created_at", "")
                         )
@@ -894,6 +912,74 @@ private object PurrFectApi {
             }
         )
     }
+
+    suspend fun uploadChatFile(
+        context: Context,
+        matchId: Int,
+        senderCatId: Int,
+        uri: Uri
+    ): JSONObject {
+        val resolver = context.contentResolver
+        val mimeType = resolver.getType(uri) ?: "application/octet-stream"
+        val fileName = uri.lastPathSegment?.substringAfterLast('/')?.takeIf { it.isNotBlank() } ?: "attachment"
+        val cleanFileName = fileName.replace("\"", "_")
+        val bytes = resolver.openInputStream(uri)?.use { it.readBytes() }
+            ?: throw IllegalStateException("Unable to read selected file")
+        if (bytes.size > 5 * 1024 * 1024) {
+            throw IllegalStateException("File is too large. Maximum size is 5 MB")
+        }
+        val boundary = "----PurrFectBoundary${UUID.randomUUID()}"
+        val url = URL("$PURR_FECT_API_BASE_URL/api/matches/$matchId/files")
+        val connection = (url.openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 30000
+            readTimeout = 30000
+            doInput = true
+            doOutput = true
+            useCaches = false
+            setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
+            setRequestProperty("Accept", "application/json")
+        }
+        try {
+            connection.outputStream.use { output ->
+                fun writeText(value: String) { output.write(value.toByteArray(Charsets.UTF_8)) }
+                writeText("--$boundary\r\n")
+                writeText("Content-Disposition: form-data; name=\"sender_cat_id\"\r\n\r\n")
+                writeText(senderCatId.toString())
+                writeText("\r\n--$boundary\r\n")
+                writeText("Content-Disposition: form-data; name=\"file\"; filename=\"$cleanFileName\"\r\n")
+                writeText("Content-Type: $mimeType\r\n\r\n")
+                output.write(bytes)
+                writeText("\r\n--$boundary--\r\n")
+            }
+            val responseCode = connection.responseCode
+            val stream = if (responseCode in 200..299) connection.inputStream else connection.errorStream
+            val responseText = BufferedReader(InputStreamReader(stream)).use { it.readText() }
+            val responseJson = JSONObject(responseText)
+            if (responseCode !in 200..299) {
+                throw IllegalStateException(responseJson.optString("message", "File upload failed"))
+            }
+            return responseJson
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    suspend fun requestPhoneNumber(requesterCatId: Int, requestedCatId: Int): JSONObject =
+        postJson("/api/cats/$requesterCatId/phone-request", JSONObject().apply {
+            put("requested_cat_id", requestedCatId)
+        })
+
+    suspend fun reportUser(reporterCatId: Int, reportedCatId: Int, reason: String): JSONObject =
+        postJson("/api/cats/$reporterCatId/report", JSONObject().apply {
+            put("reported_cat_id", reportedCatId)
+            put("reason", reason)
+        })
+
+    suspend fun blockUser(blockerCatId: Int, blockedCatId: Int): JSONObject =
+        postJson("/api/cats/$blockerCatId/block", JSONObject().apply {
+            put("blocked_cat_id", blockedCatId)
+        })
 
     suspend fun starCat(catId: Int, starredCatId: Int): JSONObject {
         return postJson(
@@ -1296,7 +1382,10 @@ MESSAGE DATA
 data class ChatMessage(
     val text: String,
     val isMine: Boolean,
-    val time: String
+    val time: String,
+    val attachmentName: String? = null,
+    val attachmentUrl: String? = null,
+    val attachmentMime: String? = null
 )
 
 /* =========================================================
@@ -1402,6 +1491,26 @@ fun PurrFectApp() {
 // The existing UI stays the same; only the data source becomes real.
     LaunchedEffect(loggedInUser?.id) {
         val userId = loggedInUser?.id ?: return@LaunchedEffect
+
+        catProfile = CatProfile(
+            id = 0,
+            name = "",
+            gender = "",
+            breed = "",
+            age = "",
+            about = "",
+            personality = "",
+            activities = "",
+            health = "",
+            lookingFor = ""
+        )
+        matchItems = emptyList()
+        starredCats = emptyList()
+        notificationItems = emptyList()
+        notificationUnreadCount = 0
+        selectedChat = null
+        selectedMatch = null
+
         val backendCat = PurrFectApi.getCatByUserId(userId)
         if (backendCat != null) {
             catProfile = backendCat
@@ -1539,12 +1648,48 @@ fun PurrFectApp() {
                     onLoginSuccess = { user ->
                         saveUserSession(context, user)
                         loggedInUser = user
+                        catProfile = CatProfile(
+                            id = 0,
+                            name = "",
+                            gender = "",
+                            breed = "",
+                            age = "",
+                            about = "",
+                            personality = "",
+                            activities = "",
+                            health = "",
+                            lookingFor = ""
+                        )
+                        matchItems = emptyList()
+                        starredCats = emptyList()
+                        notificationItems = emptyList()
+                        notificationUnreadCount = 0
+                        selectedChat = null
+                        selectedMatch = null
                         currentPage = "main"
                         selectedTab = 0
                     },
                     onGoogleSuccess = { user ->
                         saveUserSession(context, user)
                         loggedInUser = user
+                        catProfile = CatProfile(
+                            id = 0,
+                            name = "",
+                            gender = "",
+                            breed = "",
+                            age = "",
+                            about = "",
+                            personality = "",
+                            activities = "",
+                            health = "",
+                            lookingFor = ""
+                        )
+                        matchItems = emptyList()
+                        starredCats = emptyList()
+                        notificationItems = emptyList()
+                        notificationUnreadCount = 0
+                        selectedChat = null
+                        selectedMatch = null
                         currentPage = "main"
                         selectedTab = 0
                     }
@@ -7509,13 +7654,58 @@ fun IndividualChatScreen(
     chat: ChatItem,
     onBack: () -> Unit
 ) {
-    var messageText by remember {
-        mutableStateOf("")
+    var messageText by remember { mutableStateOf("") }
+    val messages = remember { mutableStateListOf<ChatMessage>() }
+    val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    var showChatOptions by remember { mutableStateOf(false) }
+    var showReportDialog by remember { mutableStateOf(false) }
+    var showBlockDialog by remember { mutableStateOf(false) }
+    var showPhoneDialog by remember { mutableStateOf(false) }
+    var showEmojiPicker by remember { mutableStateOf(false) }
+    var phoneRequestSent by remember { mutableStateOf(false) }
+    var actionMessage by remember { mutableStateOf<String?>(null) }
+
+    val filePicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri ->
+        if (uri != null) {
+            scope.launch {
+                try {
+                    val response = PurrFectApi.uploadChatFile(
+                        context = context,
+                        matchId = chat.matchId,
+                        senderCatId = currentCatId,
+                        uri = uri
+                    )
+                    val file = response.optJSONObject("file")
+                    val name = file?.optString("name", "Attachment") ?: "Attachment"
+                    val mime = file?.optString("mime_type", "application/octet-stream") ?: "application/octet-stream"
+                    val relativeUrl = file?.optString("url", "") ?: ""
+                    if (relativeUrl.isBlank()) throw IllegalStateException("File URL was not returned")
+                    val marker = "[[FILE|$name|$mime|$relativeUrl]]"
+                    PurrFectApi.sendMessage(
+                        matchId = chat.matchId,
+                        senderCatId = currentCatId,
+                        receiverCatId = chat.otherCatId,
+                        message = marker
+                    )
+                    messages.add(
+                        ChatMessage(
+                            text = name,
+                            isMine = true,
+                            time = formatChatTime(System.currentTimeMillis().toString()),
+                            attachmentName = name,
+                            attachmentUrl = relativeUrl,
+                            attachmentMime = mime
+                        )
+                    )
+                } catch (e: Exception) {
+                    actionMessage = e.message ?: "Could not send file"
+                }
+            }
+        }
     }
-    val messages = remember {
-        mutableStateListOf<ChatMessage>()
-    }
-    val individualChatScope = rememberCoroutineScope()
 
     LaunchedEffect(chat.matchId) {
         if (chat.matchId > 0) {
@@ -7529,268 +7719,313 @@ fun IndividualChatScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(
-                BackgroundColor
-            )
+            .background(BackgroundColor)
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(64.dp)
-                .background(
-                    CardColor
-                )
-                .border(
-                    width = 1.dp,
-                    color = BorderColor
-                )
-                .padding(
-                    horizontal = 8.dp
-                ),
-            verticalAlignment =
-                Alignment.CenterVertically
+                .height(68.dp)
+                .background(CardColor)
+                .border(1.dp, BorderColor)
+                .padding(horizontal = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            IconButton(
-                onClick =
-                    onBack
-            ) {
-                Icon(
-                    imageVector =
-                        Icons.Outlined.ArrowBack,
-                    contentDescription =
-                        "Back",
-                    tint =
-                        TextDark
-                )
+            IconButton(onClick = onBack) {
+                Icon(Icons.Outlined.ArrowBack, "Back", tint = TextDark)
             }
             Box(
                 modifier = Modifier
-                    .size(42.dp)
+                    .size(44.dp)
                     .clip(CircleShape)
-                    .background(
-                        Color(0xFFEDE4E0)
-                    ),
-                contentAlignment =
-                    Alignment.Center
+                    .background(Color(0xFFEDE4E0)),
+                contentAlignment = Alignment.Center
             ) {
-                Icon(
-                    imageVector =
-                        Icons.Outlined.Pets,
-                    contentDescription =
-                        "Cat",
-                    tint =
-                        TextGrey,
-                    modifier =
-                        Modifier.size(21.dp)
-                )
+                Icon(Icons.Outlined.Pets, "Cat", tint = TextGrey, modifier = Modifier.size(22.dp))
             }
-            Spacer(
-                modifier =
-                    Modifier.width(11.dp)
-            )
-            Column(
-                modifier =
-                    Modifier.weight(1f)
-            ) {
-                Text(
-                    text =
-                        chat.name,
-                    color =
-                        TextDark,
-                    fontSize =
-                        14.sp,
-                    fontWeight =
-                        FontWeight.Bold
-                )
-                Spacer(
-                    modifier =
-                        Modifier.height(2.dp)
-                )
-                Row(
-                    verticalAlignment =
-                        Alignment.CenterVertically
-                ) {
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f)) {
+                Text(chat.name, color = TextDark, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(
-                        modifier = Modifier
-                            .size(7.dp)
-                            .clip(CircleShape)
-                            .background(
-                                if (
-                                    chat.online
-                                ) {
-                                    Color(0xFF63B87A)
-                                } else {
-                                    TextGrey
-                                }
-                            )
+                        Modifier.size(7.dp).clip(CircleShape).background(
+                            if (chat.online) Color(0xFF36B56A) else TextGrey
+                        )
                     )
-                    Spacer(
-                        modifier =
-                            Modifier.width(5.dp)
-                    )
+                    Spacer(Modifier.width(5.dp))
                     Text(
-                        text =
-                            if (chat.online) {
-                                "Online"
-                            } else {
-                                chat.lastSeenLabel
-                            },
-                        color =
-                            TextGrey,
-                        fontSize =
-                            10.sp
+                        if (chat.online) "Online" else chat.lastSeenLabel,
+                        color = TextGrey,
+                        fontSize = 10.sp
                     )
                 }
             }
-        }
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f),
-            contentPadding =
-                PaddingValues(
-                    horizontal = 16.dp,
-                    vertical = 16.dp
-                ),
-            verticalArrangement =
-                Arrangement.spacedBy(10.dp)
-        ) {
-            items(
-                messages
-            ) { message ->
-                MessageBubble(
-                    message =
-                        message
-                )
+            IconButton(onClick = { showPhoneDialog = true }) {
+                Text("☎", color = TextDark, fontSize = 21.sp)
+            }
+            IconButton(onClick = { showChatOptions = true }) {
+                Text("⋮", color = TextDark, fontSize = 26.sp, fontWeight = FontWeight.Bold)
             }
         }
+
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            Row(
+                Modifier.fillMaxSize(),
+                horizontalArrangement = Arrangement.SpaceEvenly
+            ) {
+                repeat(5) { index ->
+                    Icon(
+                        Icons.Outlined.Pets,
+                        contentDescription = null,
+                        tint = Pink.copy(alpha = 0.055f),
+                        modifier = Modifier
+                            .padding(top = (80 + index * 125).dp)
+                            .size(48.dp)
+                    )
+                }
+            }
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(9.dp)
+            ) {
+                if (messages.isEmpty()) {
+                    item {
+                        Column(
+                            Modifier.fillMaxWidth().padding(top = 90.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Box(
+                                Modifier.size(62.dp).clip(CircleShape).background(Pink.copy(alpha = 0.10f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(Icons.Outlined.Pets, null, tint = Pink, modifier = Modifier.size(30.dp))
+                            }
+                            Spacer(Modifier.height(10.dp))
+                            Text("Start the conversation", color = TextDark, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                            Text("Say hello to ${chat.name} 🐾", color = TextGrey, fontSize = 11.sp)
+                        }
+                    }
+                }
+                items(messages) { message -> MessageBubble(message) }
+            }
+        }
+
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(
-                    CardColor
-                )
-                .border(
-                    width = 1.dp,
-                    color = BorderColor
-                )
-                .padding(
-                    horizontal = 12.dp,
-                    vertical = 9.dp
-                ),
-            verticalAlignment =
-                Alignment.Bottom
+                .background(CardColor)
+                .border(1.dp, BorderColor)
+                .padding(horizontal = 9.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.Bottom
         ) {
             OutlinedTextField(
-                value =
-                    messageText,
-                onValueChange = {
-                    messageText = it
+                value = messageText,
+                onValueChange = { messageText = it },
+                modifier = Modifier.weight(1f),
+                placeholder = { Text("Type a message...", color = TextGrey, fontSize = 12.sp) },
+                singleLine = false,
+                maxLines = 4,
+                shape = RoundedCornerShape(25.dp),
+                leadingIcon = {
+                    IconButton(onClick = { filePicker.launch("*/*") }) {
+                        Text("📎", fontSize = 20.sp)
+                    }
                 },
-                modifier =
-                    Modifier.weight(1f),
-                placeholder = {
-                    Text(
-                        text =
-                            "Type a message...",
-                        color =
-                            TextGrey,
-                        fontSize =
-                            12.sp
-                    )
+                trailingIcon = {
+                    IconButton(onClick = { showEmojiPicker = true }) {
+                        Text("😊", fontSize = 20.sp)
+                    }
                 },
-                singleLine =
-                    false,
-                maxLines =
-                    4,
-                shape =
-                    RoundedCornerShape(22.dp),
-                colors =
-                    OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor =
-                            Pink,
-                        unfocusedBorderColor =
-                            BorderColor,
-                        focusedContainerColor =
-                            BackgroundColor,
-                        unfocusedContainerColor =
-                            BackgroundColor,
-                        focusedTextColor =
-                            TextDark,
-                        unfocusedTextColor =
-                            TextDark,
-                        cursorColor =
-                            Pink
-                    )
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = Pink,
+                    unfocusedBorderColor = BorderColor,
+                    focusedContainerColor = BackgroundColor,
+                    unfocusedContainerColor = BackgroundColor,
+                    focusedTextColor = TextDark,
+                    unfocusedTextColor = TextDark,
+                    cursorColor = Pink
+                )
             )
-            Spacer(
-                modifier =
-                    Modifier.width(8.dp)
-            )
+            Spacer(Modifier.width(7.dp))
             Box(
-                modifier = Modifier
-                    .size(47.dp)
+                Modifier
+                    .size(48.dp)
                     .clip(CircleShape)
-                    .background(
-                        if (
-                            messageText.isNotBlank()
-                        ) {
-                            Pink
-                        } else {
-                            BorderColor
-                        }
-                    ),
-                contentAlignment =
-                    Alignment.Center
+                    .background(if (messageText.isNotBlank()) Pink else BorderColor),
+                contentAlignment = Alignment.Center
             ) {
                 IconButton(
                     onClick = {
                         val textToSend = messageText.trim()
                         if (textToSend.isNotBlank()) {
-                            individualChatScope.launch {
+                            scope.launch {
                                 try {
-                                    PurrFectApi.sendMessage(
-                                        matchId = chat.matchId,
-                                        senderCatId = currentCatId,
-                                        receiverCatId = chat.otherCatId,
-                                        message = textToSend
-                                    )
-                                    messages.add(
-                                        ChatMessage(
-                                            text = textToSend,
-                                            isMine = true,
-                                            time = "Now"
-                                        )
-                                    )
+                                    PurrFectApi.sendMessage(chat.matchId, currentCatId, chat.otherCatId, textToSend)
+                                    messages.add(ChatMessage(textToSend, true, formatChatTime(System.currentTimeMillis().toString())))
                                     messageText = ""
                                 } catch (e: Exception) {
-                                    // Error handling could be added here
+                                    actionMessage = e.message ?: "Message could not be sent"
                                 }
                             }
                         }
                     }
                 ) {
-                    Icon(
-                        imageVector =
-                            Icons.Outlined.Send,
-                        contentDescription =
-                            "Send",
-                        tint =
-                            if (
-                                messageText.isNotBlank()
-                            ) {
-                                Color.White
-                            } else {
-                                TextGrey
-                            },
-                        modifier =
-                            Modifier.size(21.dp)
-                    )
+                    Icon(Icons.Outlined.Send, "Send", tint = if (messageText.isNotBlank()) Color.White else TextGrey, modifier = Modifier.size(21.dp))
                 }
             }
         }
     }
+
+    if (showChatOptions) {
+        AlertDialog(
+            onDismissRequest = { showChatOptions = false },
+            title = { Text("Chat options", fontWeight = FontWeight.Bold) },
+            text = {
+                Column {
+                    TextButton(onClick = { showChatOptions = false; showReportDialog = true }) {
+                        Text("⚑", color = Pink, fontSize = 20.sp)
+                        Spacer(Modifier.width(10.dp))
+                        Text("Report user", color = TextDark)
+                    }
+                    TextButton(onClick = { showChatOptions = false; showBlockDialog = true }) {
+                        Text("⊘", color = Color(0xFFD94B5B), fontSize = 20.sp)
+                        Spacer(Modifier.width(10.dp))
+                        Text("Block user", color = TextDark)
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { showChatOptions = false }) { Text("Cancel", color = Pink) } }
+        )
+    }
+
+    if (showPhoneDialog) {
+        AlertDialog(
+            onDismissRequest = { if (!phoneRequestSent) showPhoneDialog = false },
+            title = { Text(if (phoneRequestSent) "Request sent" else "Request phone number", fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    if (phoneRequestSent) "Your request has been sent to ${chat.name}. If they approve it, their number can be shared with you."
+                    else "Would you like to request ${chat.name}'s phone number?"
+                )
+            },
+            confirmButton = {
+                if (phoneRequestSent) {
+                    TextButton(onClick = { showPhoneDialog = false; phoneRequestSent = false }) { Text("Done", color = Pink) }
+                } else {
+                    TextButton(onClick = {
+                        scope.launch {
+                            try {
+                                PurrFectApi.requestPhoneNumber(currentCatId, chat.otherCatId)
+                                phoneRequestSent = true
+                            } catch (e: Exception) {
+                                actionMessage = e.message ?: "Could not send request"
+                                showPhoneDialog = false
+                            }
+                        }
+                    }) { Text("Request", color = Pink) }
+                }
+            },
+            dismissButton = if (!phoneRequestSent) ({ TextButton(onClick = { showPhoneDialog = false }) { Text("Cancel") } }) else null
+        )
+    }
+
+    if (showReportDialog) {
+        AlertDialog(
+            onDismissRequest = { showReportDialog = false },
+            title = { Text("Report ${chat.name}", fontWeight = FontWeight.Bold) },
+            text = {
+                Column {
+                    listOf("Spam", "Harassment", "Inappropriate content", "Fake profile", "Other").forEach { reason ->
+                        TextButton(onClick = {
+                            showReportDialog = false
+                            scope.launch {
+                                try {
+                                    PurrFectApi.reportUser(currentCatId, chat.otherCatId, reason)
+                                    actionMessage = "Report submitted"
+                                } catch (e: Exception) {
+                                    actionMessage = e.message ?: "Could not report user"
+                                }
+                            }
+                        }) {
+                            Text("⚑", color = Pink, fontSize = 20.sp)
+                            Spacer(Modifier.width(8.dp))
+                            Text(reason, color = TextDark)
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { showReportDialog = false }) { Text("Cancel") } }
+        )
+    }
+
+    if (showBlockDialog) {
+        AlertDialog(
+            onDismissRequest = { showBlockDialog = false },
+            title = { Text("Block ${chat.name}?", fontWeight = FontWeight.Bold) },
+            text = { Text("You will no longer be able to message each other, and this chat will be removed from your chat list.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    scope.launch {
+                        try {
+                            PurrFectApi.blockUser(currentCatId, chat.otherCatId)
+                            showBlockDialog = false
+                            onBack()
+                        } catch (e: Exception) {
+                            actionMessage = e.message ?: "Could not block user"
+                            showBlockDialog = false
+                        }
+                    }
+                }) { Text("Block", color = Color(0xFFD94B5B)) }
+            },
+            dismissButton = { TextButton(onClick = { showBlockDialog = false }) { Text("Cancel") } }
+        )
+    }
+
+    if (showEmojiPicker) {
+        val emojis = listOf("😀","😂","😍","🥰","😎","😢","😡","😅","😉","😘","❤️","💕","🐱","🐾","😻","🙌","👍","👏","🔥","✨","🥹","😭","🤣","🤍","💯","🎉","😴","🤔","😇","😜","😋","🤗")
+        AlertDialog(
+            onDismissRequest = { showEmojiPicker = false },
+            title = { Text("Choose an emoji", fontWeight = FontWeight.Bold) },
+            text = {
+                Column {
+                    emojis.chunked(8).forEach { row ->
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                            row.forEach { emoji ->
+                                TextButton(onClick = { messageText += emoji; showEmojiPicker = false }) {
+                                    Text(emoji, fontSize = 24.sp)
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { showEmojiPicker = false }) { Text("Done", color = Pink) } }
+        )
+    }
+
+    actionMessage?.let { message ->
+        AlertDialog(
+            onDismissRequest = { actionMessage = null },
+            text = { Text(message) },
+            confirmButton = { TextButton(onClick = { actionMessage = null }) { Text("OK", color = Pink) } }
+        )
+    }
 }
+
+private fun formatChatTime(raw: String): String {
+    if (raw.isBlank()) return ""
+    return try {
+        val millis = raw.toLongOrNull()
+        val date = if (millis != null) Date(millis) else {
+            val normalized = raw.replace("Z", "+0000")
+            SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSZ", Locale.US).parse(normalized) ?: return raw
+        }
+        SimpleDateFormat("h:mm a", Locale.US).format(date)
+    } catch (_: Exception) {
+        raw
+    }
+}
+
 /* =========================================================
 MESSAGE BUBBLE
 ========================================================= */
@@ -7798,147 +8033,111 @@ MESSAGE BUBBLE
 fun MessageBubble(
     message: ChatMessage
 ) {
+    val context = LocalContext.current
     Row(
-        modifier =
-            Modifier.fillMaxWidth(),
-        horizontalArrangement =
-            if (
-                message.isMine
-            ) {
-                Arrangement.End
-            } else {
-                Arrangement.Start
-            }
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = if (message.isMine) Arrangement.End else Arrangement.Start
     ) {
         Column(
-            horizontalAlignment =
-                if (
-                    message.isMine
-                ) {
-                    Alignment.End
-                } else {
-                    Alignment.Start
-                }
+            horizontalAlignment = if (message.isMine) Alignment.End else Alignment.Start,
+            modifier = Modifier.fillMaxWidth(0.86f)
         ) {
             Box(
                 modifier = Modifier
-                    .width(
-                        if (
-                            message.text.length > 35
-                        ) {
-                            270.dp
-                        } else {
-                            220.dp
-                        }
-                    )
+                    .widthIn(max = 310.dp)
                     .clip(
                         RoundedCornerShape(
-                            topStart = 17.dp,
-                            topEnd = 17.dp,
-                            bottomStart =
-                                if (
-                                    message.isMine
-                                ) {
-                                    17.dp
-                                } else {
-                                    4.dp
-                                },
-                            bottomEnd =
-                                if (
-                                    message.isMine
-                                ) {
-                                    4.dp
-                                } else {
-                                    17.dp
-                                }
+                            topStart = 18.dp,
+                            topEnd = 18.dp,
+                            bottomStart = if (message.isMine) 18.dp else 5.dp,
+                            bottomEnd = if (message.isMine) 5.dp else 18.dp
                         )
                     )
-                    .background(
-                        if (
-                            message.isMine
-                        ) {
-                            Pink
-                        } else {
-                            CardColor
-                        }
-                    )
+                    .background(if (message.isMine) Pink else CardColor)
                     .border(
-                        width =
-                            if (
-                                message.isMine
-                            ) {
-                                0.dp
-                            } else {
-                                1.dp
-                            },
-                        color =
-                            if (
-                                message.isMine
-                            ) {
-                                Color.Transparent
-                            } else {
-                                BorderColor
-                            },
-                        shape =
-                            RoundedCornerShape(
-                                topStart = 17.dp,
-                                topEnd = 17.dp,
-                                bottomStart =
-                                    if (
-                                        message.isMine
-                                    ) {
-                                        17.dp
-                                    } else {
-                                        4.dp
-                                    },
-                                bottomEnd =
-                                    if (
-                                        message.isMine
-                                    ) {
-                                        4.dp
-                                    } else {
-                                        17.dp
-                                    }
-                            )
+                        if (message.isMine) 0.dp else 1.dp,
+                        if (message.isMine) Color.Transparent else BorderColor,
+                        RoundedCornerShape(
+                            topStart = 18.dp,
+                            topEnd = 18.dp,
+                            bottomStart = if (message.isMine) 18.dp else 5.dp,
+                            bottomEnd = if (message.isMine) 5.dp else 18.dp
+                        )
                     )
-                    .padding(
-                        horizontal = 14.dp,
-                        vertical = 10.dp
-                    )
+                    .padding(horizontal = 13.dp, vertical = 9.dp)
             ) {
-                Text(
-                    text =
-                        message.text,
-                    color =
-                        if (
-                            message.isMine
-                        ) {
-                            Color.White
-                        } else {
-                            TextDark
-                        },
-                    fontSize =
-                        12.sp,
-                    lineHeight =
-                        18.sp
-                )
+                if (message.attachmentUrl != null) {
+                    Column(Modifier.widthIn(min = 155.dp, max = 260.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                Modifier.size(38.dp).clip(RoundedCornerShape(11.dp)).background(
+                                    if (message.isMine) Color.White.copy(alpha = 0.18f) else Pink.copy(alpha = 0.10f)
+                                ),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    Icons.Outlined.Share,
+                                    null,
+                                    tint = if (message.isMine) Color.White else Pink,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                            Spacer(Modifier.width(9.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    message.attachmentName ?: "Attachment",
+                                    color = if (message.isMine) Color.White else TextDark,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 2
+                                )
+                                Text(
+                                    "Tap to open",
+                                    color = if (message.isMine) Color.White.copy(alpha = 0.78f) else TextGrey,
+                                    fontSize = 9.sp
+                                )
+                            }
+                        }
+                        Spacer(Modifier.height(5.dp))
+                        Text(
+                            message.time.let { formatChatTime(it) },
+                            color = if (message.isMine) Color.White.copy(alpha = 0.78f) else TextGrey,
+                            fontSize = 8.sp
+                        )
+                    }
+                } else {
+                    Column {
+                        Text(
+                            text = message.text,
+                            color = if (message.isMine) Color.White else TextDark,
+                            fontSize = 13.sp,
+                            lineHeight = 18.sp
+                        )
+                        Spacer(Modifier.height(3.dp))
+                        Text(
+                            text = formatChatTime(message.time),
+                            color = if (message.isMine) Color.White.copy(alpha = 0.78f) else TextGrey,
+                            fontSize = 8.sp,
+                            modifier = Modifier.align(Alignment.End)
+                        )
+                    }
+                }
             }
-            Spacer(
-                modifier =
-                    Modifier.height(3.dp)
-            )
-            Text(
-                text =
-                    message.time,
-                color =
-                    TextGrey,
-                fontSize =
-                    8.sp,
-                modifier =
-                    Modifier.padding(
-                        horizontal = 4.dp
-                    )
-            )
+            if (message.attachmentUrl != null) {
+                TextButton(
+                    onClick = {
+                        try {
+                            val url = if (message.attachmentUrl.startsWith("http")) message.attachmentUrl else "$PURR_FECT_API_BASE_URL${message.attachmentUrl}"
+                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                        } catch (_: Exception) {
+                            Toast.makeText(context, "No app can open this file", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp)
+                ) {
+                    Text("Open file", color = Pink, fontSize = 9.sp)
+                }
+            }
         }
     }
 }
@@ -10016,7 +10215,7 @@ fun NotificationsScreen(
                                     .background(Color(0xFFFFE3E8))
                                     .clickable { onDelete(notification.id) }
                                     .padding(horizontal = 14.dp, vertical = 7.dp)
-                                ) {
+                            ) {
                                 Text(
                                     text = "Delete",
                                     color = Color(0xFFE94057),
