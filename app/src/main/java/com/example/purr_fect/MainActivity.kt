@@ -75,6 +75,7 @@ import androidx.compose.material.icons.outlined.Email
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.VisibilityOff
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.PersonOutline
 import androidx.compose.material.icons.outlined.Pets
@@ -123,6 +124,7 @@ import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -737,6 +739,60 @@ private object PurrFectApi {
             null
         }
     }
+    suspend fun getAdoptionCats(
+        referenceCatId: Int,
+        search: String = ""
+    ): List<AdoptionCat> {
+        return try {
+            val queryParts = mutableListOf<String>()
+            if (referenceCatId > 0) queryParts += "cat_id=$referenceCatId"
+            if (search.isNotBlank()) queryParts += "search=${java.net.URLEncoder.encode(search.trim(), "UTF-8")}"
+            val path = if (queryParts.isEmpty()) {
+                "/api/adoptions"
+            } else {
+                "/api/adoptions?${queryParts.joinToString("&")}"
+            }
+            val response = getJson(path)
+            val cats = response.optJSONArray("cats") ?: return emptyList()
+            buildList {
+                for (index in 0 until cats.length()) {
+                    val cat = cats.optJSONObject(index) ?: continue
+                    val photos = cat.optJSONArray("photos")
+                    val photoUrl = findPrimaryPhotoUrl(photos)
+                    val photoBitmap = if (!photoUrl.isNullOrBlank()) {
+                        downloadBitmap(photoUrl)
+                    } else {
+                        null
+                    }
+                    add(
+                        AdoptionCat(
+                            id = cat.optInt("id", 0),
+                            name = cleanCatText(cat.optString("name", null), "Cat"),
+                            gender = cleanCatText(cat.optString("gender", null), "Not added"),
+                            breed = cleanCatText(cat.optString("breed", null), "Breed not added"),
+                            age = cleanCatText(cat.optString("age", null), "0"),
+                            about = cleanCatText(cat.optString("bio", null), "No information added yet."),
+                            personality = cleanCatText(cat.optString("personality", null), "Not added"),
+                            activities = cleanCatText(cat.optString("activities", null), "Not added"),
+                            health = cleanCatText(cat.optString("health", null), "Not added"),
+                            lookingFor = cleanCatText(cat.optString("looking_for", null), "Not added"),
+                            distanceKm = if (cat.has("distance_km") && !cat.isNull("distance_km")) {
+                                cat.optDouble("distance_km")
+                            } else {
+                                null
+                            },
+                            createdAt = cleanCatText(cat.optString("created_at", null), ""),
+                            photoUrl = photoUrl,
+                            photoBitmap = photoBitmap
+                        )
+                    )
+                }
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
     suspend fun getMatches(catId: Int): List<MatchItem> {
         if (catId <= 0) return emptyList()
         return try {
@@ -1344,6 +1400,26 @@ data class CatProfile(
     val distanceKm: Double? = null
 )
 /* =========================================================
+ADOPTION DATA
+========================================================= */
+data class AdoptionCat(
+    val id: Int = 0,
+    val name: String = "Cat",
+    val gender: String = "Not added",
+    val breed: String = "Breed not added",
+    val age: String = "0",
+    val about: String = "No information added yet.",
+    val personality: String = "Not added",
+    val activities: String = "Not added",
+    val health: String = "Not added",
+    val lookingFor: String = "Not added",
+    val distanceKm: Double? = null,
+    val createdAt: String = "",
+    val photoUrl: String? = null,
+    val photoBitmap: Bitmap? = null
+)
+
+/* =========================================================
 CHAT DATA
 ========================================================= */
 data class ChatItem(
@@ -1428,7 +1504,7 @@ fun PurrFectApp() {
         mutableStateOf<MatchItem?>(null)
     }
     var selectedAdoptionCat by remember {
-        mutableStateOf<Pair<String, String>?>(null)
+        mutableStateOf<AdoptionCat?>(null)
     }
     var showMatchPopup by remember {
         mutableStateOf(false)
@@ -1491,26 +1567,6 @@ fun PurrFectApp() {
 // The existing UI stays the same; only the data source becomes real.
     LaunchedEffect(loggedInUser?.id) {
         val userId = loggedInUser?.id ?: return@LaunchedEffect
-
-        catProfile = CatProfile(
-            id = 0,
-            name = "",
-            gender = "",
-            breed = "",
-            age = "",
-            about = "",
-            personality = "",
-            activities = "",
-            health = "",
-            lookingFor = ""
-        )
-        matchItems = emptyList()
-        starredCats = emptyList()
-        notificationItems = emptyList()
-        notificationUnreadCount = 0
-        selectedChat = null
-        selectedMatch = null
-
         val backendCat = PurrFectApi.getCatByUserId(userId)
         if (backendCat != null) {
             catProfile = backendCat
@@ -1648,48 +1704,12 @@ fun PurrFectApp() {
                     onLoginSuccess = { user ->
                         saveUserSession(context, user)
                         loggedInUser = user
-                        catProfile = CatProfile(
-                            id = 0,
-                            name = "",
-                            gender = "",
-                            breed = "",
-                            age = "",
-                            about = "",
-                            personality = "",
-                            activities = "",
-                            health = "",
-                            lookingFor = ""
-                        )
-                        matchItems = emptyList()
-                        starredCats = emptyList()
-                        notificationItems = emptyList()
-                        notificationUnreadCount = 0
-                        selectedChat = null
-                        selectedMatch = null
                         currentPage = "main"
                         selectedTab = 0
                     },
                     onGoogleSuccess = { user ->
                         saveUserSession(context, user)
                         loggedInUser = user
-                        catProfile = CatProfile(
-                            id = 0,
-                            name = "",
-                            gender = "",
-                            breed = "",
-                            age = "",
-                            about = "",
-                            personality = "",
-                            activities = "",
-                            health = "",
-                            lookingFor = ""
-                        )
-                        matchItems = emptyList()
-                        starredCats = emptyList()
-                        notificationItems = emptyList()
-                        notificationUnreadCount = 0
-                        selectedChat = null
-                        selectedMatch = null
                         currentPage = "main"
                         selectedTab = 0
                     }
@@ -2004,20 +2024,20 @@ fun PurrFectApp() {
             }
             "adoption" -> {
                 AdoptionScreen(
+                    referenceCatId = catProfile.id,
                     onBack = {
                         currentPage = "main"
                     },
-                    onCatClick = { name, details ->
-                        selectedAdoptionCat = name to details
+                    onCatClick = { cat ->
+                        selectedAdoptionCat = cat
                         currentPage = "adoptionDetails"
                     }
                 )
             }
             "adoptionDetails" -> {
-                selectedAdoptionCat?.let { (name, details) ->
+                selectedAdoptionCat?.let { cat ->
                     AdoptionDetailsScreen(
-                        name = name,
-                        details = details,
+                        cat = cat,
                         onBack = {
                             currentPage = "adoption"
                         }
@@ -9434,17 +9454,48 @@ ADOPTION SCREEN
 ========================================================= */
 @Composable
 fun AdoptionScreen(
+    referenceCatId: Int,
     onBack: () -> Unit,
-    onCatClick: (String, String) -> Unit
+    onCatClick: (AdoptionCat) -> Unit
 ) {
     var searchQuery by remember { mutableStateOf("") }
     var selectedCategory by remember { mutableIntStateOf(0) }
+    var adoptionCats by remember { mutableStateOf<List<AdoptionCat>>(emptyList()) }
+    var isLoading by remember { mutableStateOf(true) }
+    var hasLoaded by remember { mutableStateOf(false) }
+
+    LaunchedEffect(referenceCatId, searchQuery) {
+        isLoading = true
+        adoptionCats = PurrFectApi.getAdoptionCats(
+            referenceCatId = referenceCatId,
+            search = searchQuery
+        )
+        hasLoaded = true
+        isLoading = false
+    }
+
+    val filteredCats = adoptionCats.filter { cat ->
+        when (selectedCategory) {
+            1 -> {
+                val age = cat.age.toDoubleOrNull() ?: 0.0
+                age < 1.0
+            }
+            2 -> {
+                val age = cat.age.toDoubleOrNull() ?: 0.0
+                age >= 1.0 && age < 8.0
+            }
+            3 -> {
+                cat.gender.trim().equals("male", ignoreCase = true)
+            }
+            else -> true
+        }
+    }
 
     val categories = listOf(
         "All cats" to "🐾",
         "Kittens" to "🐾",
         "Adults" to "🐱",
-        "Seniors" to ""
+        "Male" to "♂"
     )
 
     Column(
@@ -9453,7 +9504,6 @@ fun AdoptionScreen(
             .background(BackgroundColor)
             .padding(horizontal = 22.dp)
     ) {
-        /* HEADER */
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -9464,7 +9514,7 @@ fun AdoptionScreen(
             IconButton(onClick = onBack) {
                 Icon(
                     imageVector = Icons.Outlined.Menu,
-                    contentDescription = "Menu",
+                    contentDescription = "Back",
                     tint = TextDark,
                     modifier = Modifier.size(28.dp)
                 )
@@ -9479,24 +9529,17 @@ fun AdoptionScreen(
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(text = "🐾", fontSize = 20.sp, color = Pink)
             }
-            Spacer(modifier = Modifier.width(48.dp)) // To center the title
+            Spacer(modifier = Modifier.width(48.dp))
         }
 
         Spacer(modifier = Modifier.height(30.dp))
 
-        /* MAIN TITLE */
         Column {
             Text(
                 text = buildAnnotatedString {
-                    withStyle(style = SpanStyle(color = TextDark)) {
-                        append("Give a Cat\na ")
-                    }
-                    withStyle(style = SpanStyle(color = Pink)) {
-                        append("Loving")
-                    }
-                    withStyle(style = SpanStyle(color = TextDark)) {
-                        append(" Home. ❤️")
-                    }
+                    withStyle(style = SpanStyle(color = TextDark)) { append("Give a Cat\na ") }
+                    withStyle(style = SpanStyle(color = Pink)) { append("Loving") }
+                    withStyle(style = SpanStyle(color = TextDark)) { append(" Home. ❤️") }
                 },
                 fontSize = 32.sp,
                 lineHeight = 40.sp,
@@ -9504,7 +9547,7 @@ fun AdoptionScreen(
             )
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = "Adopt.Love.Create a Purrfect Bond",
+                text = "Adopt. Love. Create a Purrfect Bond",
                 color = TextGrey,
                 fontSize = 15.sp
             )
@@ -9512,13 +9555,12 @@ fun AdoptionScreen(
 
         Spacer(modifier = Modifier.height(24.dp))
 
-        /* SEARCH BAR */
         OutlinedTextField(
             value = searchQuery,
             onValueChange = { searchQuery = it },
             placeholder = {
                 Text(
-                    "Search cats,breed,or locations....",
+                    "Search cats, breeds, or locations...",
                     color = TextGrey,
                     fontSize = 14.sp
                 )
@@ -9538,7 +9580,6 @@ fun AdoptionScreen(
 
         Spacer(modifier = Modifier.height(24.dp))
 
-        /* CATEGORIES */
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween
@@ -9561,11 +9602,7 @@ fun AdoptionScreen(
                         contentAlignment = Alignment.Center
                     ) {
                         if (emoji.isNotBlank()) {
-                            Text(
-                                text = emoji,
-                                fontSize = 28.sp,
-                                color = if (index == 0) Pink else TextGrey
-                            )
+                            Text(text = emoji, fontSize = 28.sp)
                         }
                     }
                     Spacer(modifier = Modifier.height(6.dp))
@@ -9581,7 +9618,6 @@ fun AdoptionScreen(
 
         Spacer(modifier = Modifier.height(28.dp))
 
-        /* LIST TITLE */
         Text(
             text = "Cats looking for homes",
             color = TextDark,
@@ -9591,77 +9627,128 @@ fun AdoptionScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        /* LIST OF CATS */
-        LazyColumn(
-            verticalArrangement = Arrangement.spacedBy(14.dp),
-            contentPadding = PaddingValues(bottom = 24.dp)
-        ) {
-            val mockAdoptionCats = listOf(
-                "Bella" to "Persian • 2 years",
-                "Charlie" to "Siamese • 1 year",
-                "Luna" to "Maine Coon • 3 years",
-                "Mochi" to "Ragdoll • 4 months",
-                "Oliver" to "British Shorthair • 2 years"
-            )
-
-            items(mockAdoptionCats.size) { index ->
-                val (name, details) = mockAdoptionCats[index]
-                Row(
+        when {
+            isLoading && !hasLoaded -> {
+                Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(90.dp)
-                        .clip(RoundedCornerShape(22.dp))
-                        .background(Color(0xFFFAF1F0))
-                        .clickable { onCatClick(name, details) }
-                        .padding(horizontal = 16.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                        .weight(1f),
+                    contentAlignment = Alignment.Center
                 ) {
-                    // MOCK IMAGE PLACEHOLDER
-                    Box(
-                        modifier = Modifier
-                            .size(60.dp)
-                            .clip(RoundedCornerShape(14.dp))
-                            .background(Color(0xFFE9E0DE)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text("🐱", fontSize = 24.sp)
-                    }
-
-                    Spacer(modifier = Modifier.width(16.dp))
-
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = name,
-                            color = TextDark,
-                            fontSize = 17.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Text(
-                            text = details,
-                            color = TextGrey,
-                            fontSize = 13.sp
-                        )
-                    }
-
-                    Icon(
-                        imageVector = Icons.Outlined.FavoriteBorder,
-                        contentDescription = "Favorite",
-                        tint = Pink,
-                        modifier = Modifier.size(24.dp)
+                    CircularProgressIndicator(color = Pink)
+                }
+            }
+            filteredCats.isEmpty() -> {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                        .padding(top = 30.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text("🐱", fontSize = 52.sp)
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = if (searchQuery.isBlank()) "No cats are available for adoption yet" else "No cats found",
+                        color = TextDark,
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.Bold,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
                     )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = if (searchQuery.isBlank()) "Cats listed for adoption will appear here." else "Try another name, breed, or search term.",
+                        color = TextGrey,
+                        fontSize = 13.sp,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    )
+                }
+            }
+            else -> {
+                LazyColumn(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                    contentPadding = PaddingValues(bottom = 24.dp)
+                ) {
+                    items(filteredCats.size) { index ->
+                        val cat = filteredCats[index]
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(90.dp)
+                                .clip(RoundedCornerShape(22.dp))
+                                .background(Color(0xFFFAF1F0))
+                                .clickable { onCatClick(cat) }
+                                .padding(horizontal = 16.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(60.dp)
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(Color(0xFFE9E0DE)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                if (cat.photoBitmap != null) {
+                                    Image(
+                                        bitmap = cat.photoBitmap.asImageBitmap(),
+                                        contentDescription = cat.name,
+                                        modifier = Modifier.fillMaxSize(),
+                                        contentScale = ContentScale.Crop
+                                    )
+                                } else {
+                                    Text("🐱", fontSize = 24.sp)
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.width(16.dp))
+
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = cat.name,
+                                    color = TextDark,
+                                    fontSize = 17.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = "${cat.breed} • ${cat.age} years",
+                                    color = TextGrey,
+                                    fontSize = 13.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                if (cat.distanceKm != null) {
+                                    Text(
+                                        text = if (cat.distanceKm < 1.0) "${(cat.distanceKm * 1000).toInt()} m away" else String.format("%.1f km away", cat.distanceKm),
+                                        color = Pink,
+                                        fontSize = 11.sp
+                                    )
+                                }
+                            }
+
+                            Icon(
+                                imageVector = Icons.Outlined.FavoriteBorder,
+                                contentDescription = "View cat",
+                                tint = Pink,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                    }
                 }
             }
         }
     }
 }
 
+
 /* =========================================================
 ADOPTION DETAILS SCREEN
 ========================================================= */
 @Composable
 fun AdoptionDetailsScreen(
-    name: String,
-    details: String,
+    cat: AdoptionCat,
     onBack: () -> Unit
 ) {
     Column(
@@ -9669,7 +9756,6 @@ fun AdoptionDetailsScreen(
             .fillMaxSize()
             .background(BackgroundColor)
     ) {
-        /* HEADER */
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -9703,7 +9789,6 @@ fun AdoptionDetailsScreen(
                 .padding(horizontal = 24.dp)
                 .verticalScroll(rememberScrollState())
         ) {
-            /* CAT IMAGE CARD */
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -9711,15 +9796,28 @@ fun AdoptionDetailsScreen(
                     .clip(RoundedCornerShape(32.dp))
                     .background(Color(0xFFE0D8D6))
             ) {
-                // Heart button on top right
+                if (cat.photoBitmap != null) {
+                    Image(
+                        bitmap = cat.photoBitmap.asImageBitmap(),
+                        contentDescription = cat.name,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop
+                    )
+                } else {
+                    Text(
+                        text = "🐱",
+                        fontSize = 120.sp,
+                        modifier = Modifier.align(Alignment.Center)
+                    )
+                }
+
                 Box(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
                         .padding(20.dp)
                         .size(44.dp)
                         .clip(CircleShape)
-                        .background(Color.White)
-                        .clickable { },
+                        .background(Color.White),
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
@@ -9729,36 +9827,39 @@ fun AdoptionDetailsScreen(
                         modifier = Modifier.size(22.dp)
                     )
                 }
-
-                // Placeholder Cat Emoji
-                Text(
-                    text = "🐱",
-                    fontSize = 120.sp,
-                    modifier = Modifier.align(Alignment.Center)
-                )
             }
 
             Spacer(modifier = Modifier.height(18.dp))
 
-            /* BREED TAG */
-            Box(
-                modifier = Modifier
-                    .align(Alignment.End)
-                    .clip(RoundedCornerShape(50))
-                    .background(LightPink)
-                    .padding(horizontal = 22.dp, vertical = 6.dp)
-            ) {
-                Text(
-                    text = details.split(" • ").firstOrNull() ?: "Cat",
-                    color = Pink,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold
-                )
+            Text(
+                text = cat.name,
+                color = TextDark,
+                fontSize = 28.sp,
+                fontWeight = FontWeight.ExtraBold
+            )
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf(cat.breed, "${cat.age} years", cat.gender).forEach { value ->
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(50))
+                            .background(LightPink)
+                            .padding(horizontal = 12.dp, vertical = 6.dp)
+                    ) {
+                        Text(
+                            text = value,
+                            color = Pink,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
             }
 
             Spacer(modifier = Modifier.height(20.dp))
 
-            /* INFO CARD */
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -9766,168 +9867,86 @@ fun AdoptionDetailsScreen(
                     .border(1.dp, BorderColor, RoundedCornerShape(28.dp))
                     .padding(24.dp)
             ) {
-                // Location
+                Text("About", color = TextDark, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(cat.about, color = TextGrey, fontSize = 15.sp, lineHeight = 22.sp)
+
+                Spacer(modifier = Modifier.height(22.dp))
+
+                Text("Location", color = TextDark, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "Location",
-                    color = TextDark,
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.SemiBold
-                )
-                Text(
-                    text = "Mumbai, India",
+                    text = cat.distanceKm?.let {
+                        if (it < 1.0) "${(it * 1000).toInt()} m away" else String.format("%.1f km away", it)
+                    } ?: "Location not available",
                     color = TextGrey,
-                    fontSize = 15.sp,
-                    modifier = Modifier.padding(top = 4.dp)
+                    fontSize = 15.sp
                 )
 
-                Spacer(modifier = Modifier.height(24.dp))
+                Spacer(modifier = Modifier.height(22.dp))
 
-                // Posted by
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        modifier = Modifier
-                            .size(38.dp)
-                            .clip(CircleShape)
-                            .background(Color(0xFFD9D9D9))
-                    )
-                    Spacer(modifier = Modifier.width(14.dp))
-                    Text(
-                        text = "Posted by",
-                        color = TextGrey,
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Medium
-                    )
-                }
+                Text("Posted by", color = TextDark, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(modifier = Modifier.height(4.dp))
+                Text("Cat owner", color = TextGrey, fontSize = 15.sp)
 
-                Spacer(modifier = Modifier.height(20.dp))
-
-                // Posted on
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        modifier = Modifier
-                            .size(38.dp)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(Color(0xFFE3F2FD)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text("📅", fontSize = 18.sp)
-                    }
-                    Spacer(modifier = Modifier.width(14.dp))
-                    Text(
-                        text = "Posted on",
-                        color = TextGrey,
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Medium
-                    )
+                if (cat.createdAt.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(22.dp))
+                    Text("Posted on", color = TextDark, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(cat.createdAt, color = TextGrey, fontSize = 15.sp)
                 }
             }
 
             Spacer(modifier = Modifier.height(24.dp))
 
-            /* ADDITIONAL INFO SECTION */
             Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(20.dp)
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(18.dp)
             ) {
-                // Personality
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(text = "🏷️", fontSize = 24.sp) // Pinkish tag or similar emoji
-                    Spacer(modifier = Modifier.width(16.dp))
-                    Text(
-                        text = "Personality",
-                        color = TextDark,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Medium
-                    )
-                }
-
-                // Favorite Activities
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(text = "😊", fontSize = 24.sp)
-                    Spacer(modifier = Modifier.width(16.dp))
-                    Text(
-                        text = "Favorite Activities",
-                        color = TextDark,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Medium
-                    )
-                }
-
-                // Health Info
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(text = "🐾", fontSize = 24.sp, color = Purple)
-                    Spacer(modifier = Modifier.width(16.dp))
-                    Text(
-                        text = "Health Info",
-                        color = TextDark,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Medium
-                    )
-                }
-
-                // Looking For
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(text = "❤️", fontSize = 24.sp)
-                    Spacer(modifier = Modifier.width(16.dp))
-                    Text(
-                        text = "Looking For",
-                        color = TextDark,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Medium
-                    )
-                }
+                Text("Personality", color = TextDark, fontSize = 16.sp, fontWeight = FontWeight.Medium)
+                Text(cat.personality, color = TextGrey, fontSize = 14.sp)
+                Text("Favorite Activities", color = TextDark, fontSize = 16.sp, fontWeight = FontWeight.Medium)
+                Text(cat.activities, color = TextGrey, fontSize = 14.sp)
+                Text("Health Info", color = TextDark, fontSize = 16.sp, fontWeight = FontWeight.Medium)
+                Text(cat.health, color = TextGrey, fontSize = 14.sp)
+                Text("Looking For", color = TextDark, fontSize = 16.sp, fontWeight = FontWeight.Medium)
+                Text(cat.lookingFor, color = TextGrey, fontSize = 14.sp)
             }
 
             Spacer(modifier = Modifier.height(40.dp))
 
-            /* BOTTOM BUTTONS */
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(16.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Message button (Outlined)
                 Box(
                     modifier = Modifier
                         .weight(1f)
                         .height(62.dp)
                         .clip(RoundedCornerShape(32.dp))
-                        .border(2.dp, Pink, RoundedCornerShape(32.dp))
-                        .clickable { },
+                        .border(2.dp, Pink, RoundedCornerShape(32.dp)),
                     contentAlignment = Alignment.Center
                 ) {
-                    Text(
-                        text = "Message",
-                        color = Pink,
-                        fontSize = 20.sp,
-                        fontWeight = FontWeight.Bold
-                    )
+                    Text("Message", color = Pink, fontSize = 18.sp, fontWeight = FontWeight.Bold)
                 }
-
-                // Adopt button (Filled)
                 Box(
                     modifier = Modifier
                         .weight(1f)
                         .height(62.dp)
                         .clip(RoundedCornerShape(32.dp))
-                        .background(Pink)
-                        .clickable { },
+                        .background(Pink),
                     contentAlignment = Alignment.Center
                 ) {
-                    Text(
-                        text = "Adopt",
-                        color = Color.White,
-                        fontSize = 22.sp,
-                        fontWeight = FontWeight.Bold
-                    )
+                    Text("Request to Adopt", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
                 }
             }
+
             Spacer(modifier = Modifier.height(30.dp))
         }
     }
 }
+
 
 
 
