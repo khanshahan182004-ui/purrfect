@@ -899,7 +899,10 @@ private object PurrFectApi {
                             unread = chat.optInt("unread_count", 0),
                             online = chat.optBoolean("other_cat_online", false),
                             lastSeenLabel = chat.optString("other_cat_last_seen_label", "Last seen unavailable"),
-                            photoUrl = chat.optString("other_cat_photo", null)
+                            photoUrl = chat.optString("other_cat_photo", null),
+                            photoBitmap = chat.optString("other_cat_photo", null)
+                                ?.takeIf { it.isNotBlank() }
+                                ?.let { downloadBitmap(it) }
                         )
                     )
                 }
@@ -1462,7 +1465,8 @@ data class ChatItem(
     val unread: Int = 0,
     val online: Boolean = false,
     val lastSeenLabel: String = "Last seen unavailable",
-    val photoUrl: String? = null
+    val photoUrl: String? = null,
+    val photoBitmap: Bitmap? = null
 )
 /* =========================================================
 MATCH DATA
@@ -1978,21 +1982,37 @@ fun PurrFectApp() {
                                     )
                                 }
 
+                                var uploadedPhotoUrl: String? = null
                                 if (updatedProfile.photoBitmap != null &&
                                     updatedProfile.photoBitmap !== catProfile.photoBitmap
                                 ) {
-                                    PurrFectApi.uploadCatPhoto(
+                                    uploadedPhotoUrl = PurrFectApi.uploadCatPhoto(
                                         catId = savedProfile.id,
                                         bitmap = updatedProfile.photoBitmap
                                     )
+                                    if (uploadedPhotoUrl.isNullOrBlank()) {
+                                        throw IllegalStateException(
+                                            "Photo upload succeeded but photo URL was not returned"
+                                        )
+                                    }
                                 }
 
-// Re-fetch the complete profile so the uploaded image
-// and all backend values are immediately reflected.
-                                catProfile =
+// Re-fetch the complete profile so all backend values are immediately reflected.
+// Keep the freshly selected bitmap as the immediate photo fallback because
+// the emulator may not be able to download a localhost photo URL again.
+                                val refreshedProfile =
                                     PurrFectApi.getCatByUserId(
                                         loggedInUser?.id ?: 0
-                                    ) ?: savedProfile
+                                    )
+                                catProfile =
+                                    if (uploadedPhotoUrl != null && updatedProfile.photoBitmap != null) {
+                                        (refreshedProfile ?: savedProfile).copy(
+                                            photoUrl = uploadedPhotoUrl,
+                                            photoBitmap = updatedProfile.photoBitmap
+                                        )
+                                    } else {
+                                        refreshedProfile ?: savedProfile
+                                    }
                                 currentPage = "main"
                                 selectedTab = 3
                                 Toast.makeText(
@@ -7580,16 +7600,25 @@ fun ChatRow(
             contentAlignment =
                 Alignment.Center
         ) {
-            Icon(
-                imageVector =
-                    Icons.Outlined.Pets,
-                contentDescription =
-                    "Cat photo",
-                tint =
-                    TextGrey,
-                modifier =
-                    Modifier.size(25.dp)
-            )
+            if (chat.photoBitmap != null) {
+                Image(
+                    bitmap = chat.photoBitmap.asImageBitmap(),
+                    contentDescription = "${chat.name} photo",
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+            } else {
+                Icon(
+                    imageVector =
+                        Icons.Outlined.Pets,
+                    contentDescription =
+                        "Cat photo",
+                    tint =
+                        TextGrey,
+                    modifier =
+                        Modifier.size(25.dp)
+                )
+            }
             if (chat.online) {
                 Box(
                     modifier = Modifier
@@ -10420,4 +10449,5 @@ fun NotificationsScreen(
         }
     }
 }
+
 
