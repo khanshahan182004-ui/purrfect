@@ -93,6 +93,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.Switch
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -648,6 +649,10 @@ private object PurrFectApi {
                 lookingFor = cleanCatText(
                     cat.optString("looking_for", null),
                     "Not added"
+                ),
+                adoptionIntent = cleanCatText(
+                    cat.optString("adoption_intent", null),
+                    "none"
                 ),
                 photoUrl = photoUrl,
                 photoBitmap = photoBitmap
@@ -1207,6 +1212,30 @@ private object PurrFectApi {
         )
     }
 
+    suspend fun updateAdoptionSettings(catId: Int, adoptionIntent: String): JSONObject {
+        if (catId <= 0) throw IllegalStateException("Cat ID is missing")
+        return putJson(
+            "/api/cats/$catId/adoption-settings",
+            JSONObject().apply { put("adoption_intent", adoptionIntent) }
+        )
+    }
+
+    suspend fun createAdoptionRequest(
+        catId: Int,
+        adopterCatId: Int,
+        message: String
+    ): JSONObject {
+        if (catId <= 0) throw IllegalStateException("Adoption cat ID is missing")
+        if (adopterCatId <= 0) throw IllegalStateException("Your cat ID is missing")
+        return postJson(
+            "/api/adoptions/$catId/requests",
+            JSONObject().apply {
+                put("adopter_cat_id", adopterCatId)
+                put("message", message.trim().take(1000))
+            }
+        )
+    }
+
     suspend fun updateCat(profile: CatProfile): CatProfile? {
         if (profile.id <= 0) {
             throw IllegalStateException("Cat ID is missing")
@@ -1236,7 +1265,8 @@ private object PurrFectApi {
             personality = cleanCatText(cat.optString("personality", null), profile.personality),
             activities = cleanCatText(cat.optString("activities", null), profile.activities),
             health = cleanCatText(cat.optString("health", null), profile.health),
-            lookingFor = cleanCatText(cat.optString("looking_for", null), profile.lookingFor)
+            lookingFor = cleanCatText(cat.optString("looking_for", null), profile.lookingFor),
+            adoptionIntent = cleanCatText(cat.optString("adoption_intent", null), profile.adoptionIntent)
         )
     }
 }
@@ -1397,7 +1427,8 @@ data class CatProfile(
         "Playmate",
     val photoUrl: String? = null,
     val photoBitmap: Bitmap? = null,
-    val distanceKm: Double? = null
+    val distanceKm: Double? = null,
+    val adoptionIntent: String = "none"
 )
 /* =========================================================
 ADOPTION DATA
@@ -1940,6 +1971,13 @@ fun PurrFectApp() {
                                     )
                                 }
 
+                                if (savedProfile.id > 0) {
+                                    PurrFectApi.updateAdoptionSettings(
+                                        catId = savedProfile.id,
+                                        adoptionIntent = updatedProfile.adoptionIntent
+                                    )
+                                }
+
                                 if (updatedProfile.photoBitmap != null &&
                                     updatedProfile.photoBitmap !== catProfile.photoBitmap
                                 ) {
@@ -2038,6 +2076,7 @@ fun PurrFectApp() {
                 selectedAdoptionCat?.let { cat ->
                     AdoptionDetailsScreen(
                         cat = cat,
+                        currentCatId = catProfile.id,
                         onBack = {
                             currentPage = "adoption"
                         }
@@ -8509,6 +8548,9 @@ fun EditCatProfileScreen(
             }
         )
     }
+    var adoptionEnabled by remember {
+        mutableStateOf(profile.adoptionIntent.equals("offer", ignoreCase = true))
+    }
 
     // Edit Profile entrance animation: photo, form content and save button
     // animate independently without changing any existing functionality.
@@ -8837,6 +8879,40 @@ fun EditCatProfileScreen(
                 )
             }
             item {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(16.dp))
+                        .border(1.dp, BorderColor, RoundedCornerShape(16.dp))
+                        .padding(horizontal = 16.dp, vertical = 14.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Available for adoption",
+                                color = TextDark,
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                text = if (adoptionEnabled) "Your cat will appear in Adopt a cat." else "Your cat will not appear in adoption listings.",
+                                color = TextGrey,
+                                fontSize = 12.sp
+                            )
+                        }
+                        Switch(
+                            checked = adoptionEnabled,
+                            onCheckedChange = { adoptionEnabled = it }
+                        )
+                    }
+                }
+            }
+            item {
                 Button(
                     onClick = {
                         savePressScope.launch {
@@ -8880,6 +8956,7 @@ fun EditCatProfileScreen(
                                     lookingFor.ifBlank {
                                         "Not added"
                                     },
+                                adoptionIntent = if (adoptionEnabled) "offer" else "none",
                                 photoBitmap =
                                     selectedPhotoBitmap
                             )
@@ -9749,8 +9826,16 @@ ADOPTION DETAILS SCREEN
 @Composable
 fun AdoptionDetailsScreen(
     cat: AdoptionCat,
+    currentCatId: Int,
     onBack: () -> Unit
 ) {
+    val scope = rememberCoroutineScope()
+    var showRequestDialog by remember { mutableStateOf(false) }
+    var showMessageDialog by remember { mutableStateOf(false) }
+    var requestMessage by remember { mutableStateOf("") }
+    var isSendingRequest by remember { mutableStateOf(false) }
+    var actionMessage by remember { mutableStateOf<String?>(null) }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -9925,7 +10010,8 @@ fun AdoptionDetailsScreen(
                         .weight(1f)
                         .height(62.dp)
                         .clip(RoundedCornerShape(32.dp))
-                        .border(2.dp, Pink, RoundedCornerShape(32.dp)),
+                        .border(2.dp, Pink, RoundedCornerShape(32.dp))
+                        .clickable { showMessageDialog = true },
                     contentAlignment = Alignment.Center
                 ) {
                     Text("Message", color = Pink, fontSize = 18.sp, fontWeight = FontWeight.Bold)
@@ -9935,7 +10021,11 @@ fun AdoptionDetailsScreen(
                         .weight(1f)
                         .height(62.dp)
                         .clip(RoundedCornerShape(32.dp))
-                        .background(Pink),
+                        .background(Pink)
+                        .clickable {
+                            requestMessage = "I would like to adopt ${cat.name}."
+                            showRequestDialog = true
+                        },
                     contentAlignment = Alignment.Center
                 ) {
                     Text("Request to Adopt", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
@@ -9944,6 +10034,87 @@ fun AdoptionDetailsScreen(
 
             Spacer(modifier = Modifier.height(30.dp))
         }
+    }
+
+    if (showMessageDialog) {
+        AlertDialog(
+            onDismissRequest = { showMessageDialog = false },
+            title = { Text("Message ${cat.name}", fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    "Direct messaging is available after an adoption request is accepted. You can send your request below to start the adoption process.",
+                    color = TextGrey
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showMessageDialog = false
+                    requestMessage = "Hi! I am interested in adopting ${cat.name}."
+                    showRequestDialog = true
+                }) { Text("Send adoption request", color = Pink) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showMessageDialog = false }) { Text("Cancel", color = TextGrey) }
+            }
+        )
+    }
+
+    if (showRequestDialog) {
+        AlertDialog(
+            onDismissRequest = { if (!isSendingRequest) showRequestDialog = false },
+            title = { Text("Request to adopt ${cat.name}", fontWeight = FontWeight.Bold) },
+            text = {
+                Column {
+                    Text("Send a short message to the owner.", color = TextGrey, fontSize = 13.sp)
+                    Spacer(modifier = Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = requestMessage,
+                        onValueChange = { if (it.length <= 1000) requestMessage = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        minLines = 4,
+                        maxLines = 6,
+                        enabled = !isSendingRequest,
+                        placeholder = { Text("Write a message...") },
+                        supportingText = { Text("${requestMessage.length}/1000") }
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = !isSendingRequest && currentCatId > 0 && requestMessage.isNotBlank(),
+                    onClick = {
+                        scope.launch {
+                            isSendingRequest = true
+                            try {
+                                val response = PurrFectApi.createAdoptionRequest(cat.id, currentCatId, requestMessage)
+                                actionMessage = response.optString("message", "Adoption request sent successfully")
+                                showRequestDialog = false
+                            } catch (error: Exception) {
+                                actionMessage = error.message ?: "Could not send adoption request"
+                            } finally {
+                                isSendingRequest = false
+                            }
+                        }
+                    }
+                ) {
+                    Text(if (isSendingRequest) "Sending..." else "Send Request", color = Pink)
+                }
+            },
+            dismissButton = {
+                TextButton(enabled = !isSendingRequest, onClick = { showRequestDialog = false }) {
+                    Text("Cancel", color = TextGrey)
+                }
+            }
+        )
+    }
+
+    actionMessage?.let { message ->
+        AlertDialog(
+            onDismissRequest = { actionMessage = null },
+            title = { Text("Adoption", fontWeight = FontWeight.Bold) },
+            text = { Text(message) },
+            confirmButton = { TextButton(onClick = { actionMessage = null }) { Text("OK", color = Pink) } }
+        )
     }
 }
 
@@ -10249,3 +10420,4 @@ fun NotificationsScreen(
         }
     }
 }
+
