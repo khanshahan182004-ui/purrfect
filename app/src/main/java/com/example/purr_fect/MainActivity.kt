@@ -899,10 +899,7 @@ private object PurrFectApi {
                             unread = chat.optInt("unread_count", 0),
                             online = chat.optBoolean("other_cat_online", false),
                             lastSeenLabel = chat.optString("other_cat_last_seen_label", "Last seen unavailable"),
-                            photoUrl = chat.optString("other_cat_photo", null),
-                            photoBitmap = chat.optString("other_cat_photo", null)
-                                ?.takeIf { it.isNotBlank() }
-                                ?.let { downloadBitmap(it) }
+                            photoUrl = chat.optString("other_cat_photo", null)
                         )
                     )
                 }
@@ -1465,8 +1462,7 @@ data class ChatItem(
     val unread: Int = 0,
     val online: Boolean = false,
     val lastSeenLabel: String = "Last seen unavailable",
-    val photoUrl: String? = null,
-    val photoBitmap: Bitmap? = null
+    val photoUrl: String? = null
 )
 /* =========================================================
 MATCH DATA
@@ -1982,37 +1978,21 @@ fun PurrFectApp() {
                                     )
                                 }
 
-                                var uploadedPhotoUrl: String? = null
                                 if (updatedProfile.photoBitmap != null &&
                                     updatedProfile.photoBitmap !== catProfile.photoBitmap
                                 ) {
-                                    uploadedPhotoUrl = PurrFectApi.uploadCatPhoto(
+                                    PurrFectApi.uploadCatPhoto(
                                         catId = savedProfile.id,
                                         bitmap = updatedProfile.photoBitmap
                                     )
-                                    if (uploadedPhotoUrl.isNullOrBlank()) {
-                                        throw IllegalStateException(
-                                            "Photo upload succeeded but photo URL was not returned"
-                                        )
-                                    }
                                 }
 
-// Re-fetch the complete profile so all backend values are immediately reflected.
-// Keep the freshly selected bitmap as the immediate photo fallback because
-// the emulator may not be able to download a localhost photo URL again.
-                                val refreshedProfile =
+// Re-fetch the complete profile so the uploaded image
+// and all backend values are immediately reflected.
+                                catProfile =
                                     PurrFectApi.getCatByUserId(
                                         loggedInUser?.id ?: 0
-                                    )
-                                catProfile =
-                                    if (uploadedPhotoUrl != null && updatedProfile.photoBitmap != null) {
-                                        (refreshedProfile ?: savedProfile).copy(
-                                            photoUrl = uploadedPhotoUrl,
-                                            photoBitmap = updatedProfile.photoBitmap
-                                        )
-                                    } else {
-                                        refreshedProfile ?: savedProfile
-                                    }
+                                    ) ?: savedProfile
                                 currentPage = "main"
                                 selectedTab = 3
                                 Toast.makeText(
@@ -4941,13 +4921,16 @@ fun DiscoverScreen(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(top = 8.dp, bottom = 10.dp)
+                .padding(
+                    horizontal = 16.dp,
+                    vertical = 8.dp
+                )
                 .graphicsLayer {
                     alpha = discoverActionsEntrance.value
                     translationY =
                         (1f - discoverActionsEntrance.value) * 10.dp.toPx()
                 },
-            horizontalArrangement = Arrangement.SpaceEvenly,
+            horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             ActionButton(
@@ -5133,7 +5116,7 @@ fun HeartBurstButton(
 ) {
     Box(
         modifier =
-            Modifier.size(100.dp),
+            Modifier.size(53.dp),
         contentAlignment =
             Alignment.Center
     ) {
@@ -7600,25 +7583,16 @@ fun ChatRow(
             contentAlignment =
                 Alignment.Center
         ) {
-            if (chat.photoBitmap != null) {
-                Image(
-                    bitmap = chat.photoBitmap.asImageBitmap(),
-                    contentDescription = "${chat.name} photo",
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize()
-                )
-            } else {
-                Icon(
-                    imageVector =
-                        Icons.Outlined.Pets,
-                    contentDescription =
-                        "Cat photo",
-                    tint =
-                        TextGrey,
-                    modifier =
-                        Modifier.size(25.dp)
-                )
-            }
+            Icon(
+                imageVector =
+                    Icons.Outlined.Pets,
+                contentDescription =
+                    "Cat photo",
+                tint =
+                    TextGrey,
+                modifier =
+                    Modifier.size(25.dp)
+            )
             if (chat.online) {
                 Box(
                     modifier = Modifier
