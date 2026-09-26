@@ -1,3 +1,4 @@
+
 package com.example.purr_fect
 import android.content.Intent
 import android.app.NotificationChannel
@@ -2659,349 +2660,407 @@ fun WelcomeScreen(
     val screenWidth = configuration.screenWidthDp.dp
     val screenHeight = configuration.screenHeightDp.dp
     val welcomeEntrance = remember { Animatable(0f) }
+
     LaunchedEffect(Unit) {
         welcomeEntrance.animateTo(
             targetValue = 1f,
             animationSpec = tween(durationMillis = 500)
         )
     }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.White)
+            .background(Color(0xFFFFF9F6))
             .graphicsLayer {
                 alpha = welcomeEntrance.value
-                val scale = 0.97f + (0.03f * welcomeEntrance.value)
+                val scale = 0.98f + (0.02f * welcomeEntrance.value)
                 scaleX = scale
                 scaleY = scale
             }
     ) {
-/* =================================================
-DECORATIVE CIRCLES
-================================================= */
+        /* =================================================
+        SOFT BACKGROUND BLOBS
+        ================================================= */
+        Box(
+            modifier = Modifier
+                .size(170.dp)
+                .offset(
+                    x = (-65).dp,
+                    y = (-25).dp
+                )
+                .clip(CircleShape)
+                .background(Color(0xFFFFE8E5))
+        )
+
+        Box(
+            modifier = Modifier
+                .size(170.dp)
+                .offset(
+                    x = screenWidth - 55.dp,
+                    y = screenHeight * 0.16f
+                )
+                .clip(CircleShape)
+                .background(Color(0xFFFFE9E8))
+        )
+
+        Box(
+            modifier = Modifier
+                .size(145.dp)
+                .offset(
+                    x = (-65).dp,
+                    y = screenHeight * 0.72f
+                )
+                .clip(CircleShape)
+                .background(Color(0xFFFFE9E8))
+        )
+
+        Box(
+            modifier = Modifier
+                .size(155.dp)
+                .offset(
+                    x = screenWidth - 65.dp,
+                    y = screenHeight * 0.88f
+                )
+                .clip(CircleShape)
+                .background(Color(0xFFFFE8E5))
+        )
+
+        /* =================================================
+        PEACH DECORATIVE CIRCLES
+        ================================================= */
         WelcomeCircle(
-            x = screenWidth * 0.29f,
-            y = screenHeight * 0.035f
+            x = screenWidth * 0.24f,
+            y = screenHeight * 0.075f
         )
         WelcomeCircle(
+            x = screenWidth * 0.82f,
+            y = screenHeight * 0.61f
+        )
+        WelcomeCircle(
+            x = screenWidth * 0.34f,
+            y = screenHeight * 0.90f
+        )
+
+        /* =================================================
+        DECORATIVE STARS
+        ================================================= */
+        WelcomeStar(
+            text = "★",
+            x = screenWidth * 0.10f,
+            y = screenHeight * 0.36f,
+            size = 27,
+            color = Color(0xFFFFD86A)
+        )
+        WelcomeStar(
+            text = "★",
             x = screenWidth * 0.77f,
-            y = screenHeight * 0.19f
-        )
-        WelcomeCircle(
-            x = screenWidth * 0.28f,
-            y = screenHeight * 0.255f
-        )
-        WelcomeCircle(
-            x = screenWidth * 0.79f,
-            y = screenHeight * 0.64f
-        )
-        WelcomeCircle(
-            x = screenWidth * 0.37f,
-            y = screenHeight * 0.81f
-        )
-        /* =================================================
-YELLOW STARS
-================================================= */
-        WelcomeStar(
-            text = "★",
-            x = screenWidth * 0.47f,
-            y = screenHeight * 0.085f,
-            size = 28
+            y = screenHeight * 0.15f,
+            size = 28,
+            color = Color(0xFFFFD86A)
         )
         WelcomeStar(
             text = "★",
-            x = screenWidth * 0.62f,
-            y = screenHeight * 0.145f,
-            size = 26
+            x = screenWidth * 0.78f,
+            y = screenHeight * 0.53f,
+            size = 27,
+            color = Color(0xFFFFD86A)
         )
         WelcomeStar(
             text = "★",
-            x = screenWidth * 0.285f,
-            y = screenHeight * 0.47f,
-            size = 28
+            x = screenWidth * 0.08f,
+            y = screenHeight * 0.82f,
+            size = 27,
+            color = Color(0xFFFFD86A)
         )
+
         WelcomeStar(
-            text = "★",
-            x = screenWidth * 0.73f,
-            y = screenHeight * 0.79f,
-            size = 26
-        )
-        /* =================================================
-OUTLINE STARS
-================================================= */
-        WelcomeStar(
-            text = "🐾",
-            x = screenWidth * 0.43f,
-            y = screenHeight * 0.018f,
-            size = 31,
-            color = Color(0xFFFFA9C4)
-        )
-        WelcomeStar(
-            text = "🐾",
-            x = screenWidth * 0.69f,
+            text = "H",
+            x = screenWidth * 0.82f,
             y = screenHeight * 0.035f,
             size = 31,
-            color = Color(0xFFFFA9C4)
+            color = Color(0xFFFF9FBB)
         )
         WelcomeStar(
-            text = "🐾",
-            x = screenWidth * 0.30f,
-            y = screenHeight * 0.365f,
-            size = 29,
-            color = Color(0xFFFFA9C4)
+            text = "H",
+            x = screenWidth * 0.38f,
+            y = screenHeight * 0.025f,
+            size = 31,
+            color = Color(0xFFFF9FBB)
         )
         WelcomeStar(
-            text = "🐾",
-            x = screenWidth * 0.76f,
-            y = screenHeight * 0.39f,
-            size = 29,
-            color = Color(0xFFFFA9C4)
+            text = "H",
+            x = screenWidth * 0.78f,
+            y = screenHeight * 0.82f,
+            size = 31,
+            color = Color(0xFFFF9FBB)
         )
-        WelcomeStar(
-            text = "🐾",
-            x = screenWidth * 0.255f,
-            y = screenHeight * 0.74f,
-            size = 29,
-            color = Color(0xFFFFA9C4)
-        )
+
         /* =================================================
-PAW LOGO
-================================================= */
+        SMALL PAW DECORATIONS
+        ================================================= */
         Icon(
             imageVector = Icons.Outlined.Pets,
-            contentDescription = "Purr Match",
-            tint = Pink,
+            contentDescription = null,
+            tint = Color(0xFFFF9FBB),
             modifier = Modifier
-                .size(70.dp)
-                .align(Alignment.TopCenter)
+                .size(28.dp)
                 .offset(
-                    y = screenHeight * 0.165f
+                    x = screenWidth * 0.08f,
+                    y = screenHeight * 0.19f
                 )
         )
+
+        Icon(
+            imageVector = Icons.Outlined.Pets,
+            contentDescription = null,
+            tint = Color(0xFFFF9FBB),
+            modifier = Modifier
+                .size(25.dp)
+                .offset(
+                    x = screenWidth * 0.82f,
+                    y = screenHeight * 0.40f
+                )
+        )
+
+        Icon(
+            imageVector = Icons.Outlined.Pets,
+            contentDescription = null,
+            tint = Color(0xFFA98BEF),
+            modifier = Modifier
+                .size(27.dp)
+                .offset(
+                    x = screenWidth * 0.84f,
+                    y = screenHeight * 0.79f
+                )
+        )
+
         /* =================================================
-APP NAME
-================================================= */
+        MAIN PAW LOGO
+        ================================================= */
+        Box(
+            modifier = Modifier
+                .size(92.dp)
+                .align(Alignment.TopCenter)
+                .offset(y = screenHeight * 0.135f),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = Icons.Outlined.Pets,
+                contentDescription = "Purr-fect",
+                tint = Color(0xFFFF4F79),
+                modifier = Modifier.size(82.dp)
+            )
+
+            Icon(
+                imageVector = Icons.Filled.Favorite,
+                contentDescription = null,
+                tint = Color.White,
+                modifier = Modifier
+                    .size(24.dp)
+                    .offset(y = 8.dp)
+            )
+        }
+
+        /* =================================================
+        APP NAME
+        ================================================= */
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .align(Alignment.TopCenter)
-                .offset(
-                    y = screenHeight * 0.245f
-                ),
-            horizontalArrangement =
-                Arrangement.Center,
-            verticalAlignment =
-                Alignment.CenterVertically
+                .offset(y = screenHeight * 0.245f),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
                 text = "Purr",
                 color = Color(0xFF18142E),
-                fontSize = 32.sp,
-                fontWeight =
-                    FontWeight.ExtraBold
+                fontSize = 39.sp,
+                fontWeight = FontWeight.ExtraBold,
+                letterSpacing = (-1.1).sp
             )
+
             Text(
-                text = " Match",
-                color = Pink,
-                fontSize = 32.sp,
-                fontWeight =
-                    FontWeight.ExtraBold
+                text = "Fect",
+                color = Color(0xFFFF4F79),
+                fontSize = 39.sp,
+                fontWeight = FontWeight.ExtraBold,
+                letterSpacing = (-1.1).sp
             )
         }
+
         /* =================================================
-TAGLINE
-================================================= */
+        TAGLINE
+        ================================================= */
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .align(Alignment.TopCenter)
-                .offset(
-                    y = screenHeight * 0.315f
-                ),
-            horizontalAlignment =
-                Alignment.CenterHorizontally
+                .offset(y = screenHeight * 0.315f),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text(
                 text = "Where cats find",
-                color = Color.Black,
-                fontSize = 14.sp,
-                fontWeight =
-                    FontWeight.Bold,
-                fontStyle =
-                    FontStyle.Italic,
-                fontFamily =
-                    FontFamily.Serif
+                color = Color(0xFF514A4A),
+                fontSize = 17.sp,
+                fontWeight = FontWeight.SemiBold,
+                fontStyle = FontStyle.Italic,
+                fontFamily = FontFamily.Serif
             )
+
             Text(
                 text = "Their purrfect match",
-                color = Color.Black,
-                fontSize = 14.sp,
-                fontWeight =
-                    FontWeight.Bold,
-                fontStyle =
-                    FontStyle.Italic,
-                fontFamily =
-                    FontFamily.Serif
+                color = Color(0xFF514A4A),
+                fontSize = 17.sp,
+                fontWeight = FontWeight.SemiBold,
+                fontStyle = FontStyle.Italic,
+                fontFamily = FontFamily.Serif
             )
+
+            Row(
+                modifier = Modifier.padding(top = 7.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .width(45.dp)
+                        .height(2.dp)
+                        .clip(RoundedCornerShape(2.dp))
+                        .background(Color(0xFFFFA9C4))
+                )
+
+                Icon(
+                    imageVector = Icons.Outlined.FavoriteBorder,
+                    contentDescription = null,
+                    tint = Color(0xFFFF91AF),
+                    modifier = Modifier
+                        .padding(horizontal = 7.dp)
+                        .size(20.dp)
+                )
+
+                Box(
+                    modifier = Modifier
+                        .width(45.dp)
+                        .height(2.dp)
+                        .clip(RoundedCornerShape(2.dp))
+                        .background(Color(0xFFFFA9C4))
+                )
+            }
         }
+
         /* =================================================
-TWO CATS
-IMPORTANT:
-EACH CAT HAS EXACTLY TWO EARS.
-================================================= */
+        TWO CATS
+        ================================================= */
         WelcomeCats(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(
-                    screenHeight * 0.28f
-                )
+                .height(screenHeight * 0.30f)
                 .align(Alignment.TopCenter)
-                .offset(
-                    y = screenHeight * 0.405f
-                )
+                .offset(y = screenHeight * 0.405f)
         )
+
         /* =================================================
-HEART
-================================================= */
-        Text(
-            text = "♥",
-            color =
-                Color(0xFFFF3F72),
-            fontSize =
-                34.sp,
-            modifier =
-                Modifier
-                    .align(
-                        Alignment.TopCenter
-                    )
-                    .offset(
-                        y = screenHeight * 0.545f
-                    )
+        HEART ABOVE CATS
+        ================================================= */
+        Icon(
+            imageVector = Icons.Filled.Favorite,
+            contentDescription = null,
+            tint = Color(0xFFFF3F72),
+            modifier = Modifier
+                .size(39.dp)
+                .align(Alignment.TopCenter)
+                .offset(y = screenHeight * 0.445f)
         )
+
         /* =================================================
-GET STARTED
-================================================= */
+        GET STARTED
+        ================================================= */
         Button(
-            onClick =
-                onGetStarted,
-            modifier =
-                Modifier
-                    .width(
-                        screenWidth * 0.50f
-                    )
-                    .height(52.dp)
-                    .align(
-                        Alignment.TopCenter
-                    )
-                    .offset(
-                        y = screenHeight * 0.675f
-                    ),
-            shape =
-                RoundedCornerShape(26.dp),
-            colors =
-                ButtonDefaults.buttonColors(
-                    containerColor =
-                        Color(0xFFFF3F72)
-                )
+            onClick = onGetStarted,
+            modifier = Modifier
+                .width(screenWidth * 0.72f)
+                .height(58.dp)
+                .align(Alignment.TopCenter)
+                .offset(y = screenHeight * 0.695f),
+            shape = RoundedCornerShape(30.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = Color(0xFFFF4F79)
+            ),
+            elevation = ButtonDefaults.buttonElevation(
+                defaultElevation = 5.dp,
+                pressedElevation = 2.dp
+            )
         ) {
             Icon(
-                imageVector =
-                    Icons.Outlined.Pets,
-                contentDescription =
-                    null,
-                tint =
-                    Color.White,
-                modifier =
-                    Modifier.size(21.dp)
+                imageVector = Icons.Outlined.Pets,
+                contentDescription = null,
+                tint = Color.White,
+                modifier = Modifier.size(27.dp)
             )
-            Spacer(
-                modifier =
-                    Modifier.width(6.dp)
-            )
+
+            Spacer(modifier = Modifier.width(9.dp))
+
             Text(
                 text = "Get Started",
                 color = Color.White,
-                fontSize = 15.sp,
-                fontWeight =
-                    FontWeight.Bold
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold
             )
         }
+
         /* =================================================
-SIGN UP
-================================================= */
+        SIGN UP
+        ================================================= */
         Row(
-            modifier =
-                Modifier
-                    .align(
-                        Alignment.TopCenter
-                    )
-                    .offset(
-                        y = screenHeight * 0.750f
-                    )
-                    .clickable {
-                        onSignUp()
-                    },
-            verticalAlignment =
-                Alignment.CenterVertically
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .offset(y = screenHeight * 0.775f)
+                .clickable { onSignUp() }
+                .padding(8.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text =
-                    "New user? ",
-                color =
-                    Color(0xFF777777),
-                fontSize =
-                    10.sp
+                text = "New user? ",
+                color = Color(0xFF777777),
+                fontSize = 13.sp
             )
+
             Text(
-                text =
-                    "Sign Up",
-                color =
-                    Pink,
-                fontSize =
-                    10.sp,
-                fontWeight =
-                    FontWeight.Bold
+                text = "Sign Up",
+                color = Color(0xFFFF4F79),
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold
             )
         }
+
         /* =================================================
-LOGIN
-================================================= */
+        LOGIN
+        ================================================= */
         Row(
-            modifier =
-                Modifier
-                    .align(
-                        Alignment.TopCenter
-                    )
-                    .offset(
-                        y = screenHeight * 0.785f
-                    )
-                    .clickable {
-                        onLogin()
-                    },
-            verticalAlignment =
-                Alignment.CenterVertically
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .offset(y = screenHeight * 0.835f)
+                .clickable { onLogin() }
+                .padding(8.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text =
-                    "Already have an account? ",
-                color =
-                    Color(0xFF777777),
-                fontSize =
-                    10.sp
+                text = "Already have an account? ",
+                color = Color(0xFF777777),
+                fontSize = 13.sp
             )
+
             Text(
-                text =
-                    "Login",
-                color =
-                    Pink,
-                fontSize =
-                    10.sp,
-                fontWeight =
-                    FontWeight.Bold
+                text = "Login",
+                color = Color(0xFFFF4F79),
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold
             )
         }
     }
 }
+
 /* =========================================================
 SIGN UP SCREEN
 ========================================================= */
@@ -10423,5 +10482,6 @@ fun NotificationsScreen(
         }
     }
 }
+
 
 
