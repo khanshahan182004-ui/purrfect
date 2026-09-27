@@ -1691,6 +1691,11 @@ fun PurrFectApp() {
     var currentPage by remember {
         mutableStateOf(if (savedUser != null) "main" else "welcome")
     }
+    // Remembers where Edit Cat Profile was opened from so Back/Save
+    // returns to the correct screen without changing existing navigation.
+    var editReturnPage by remember {
+        mutableStateOf("main")
+    }
     var isSideMenuOpen by remember {
         mutableStateOf(false)
     }
@@ -2053,6 +2058,7 @@ fun PurrFectApp() {
                         MyCatScreen(
                             profile = catProfile,
                             onEditProfile = {
+                                editReturnPage = "main"
                                 currentPage = "edit"
                             },
                             onSettingsClick = {
@@ -2115,6 +2121,7 @@ fun PurrFectApp() {
                         selectedTab = 3
                     },
                     onEditProfile = {
+                        editReturnPage = "settings"
                         currentPage = "edit"
                     },
                     onMyCatProfiles = {
@@ -2204,6 +2211,7 @@ fun PurrFectApp() {
                     activeCatId = catProfile.id,
                     onBack = { currentPage = "settings" },
                     onAddCat = {
+                        editReturnPage = "myCatProfiles"
                         catProfile = CatProfile(
                             id = 0, name = "", gender = "", breed = "", age = "",
                             about = "", personality = "", activities = "", health = "", lookingFor = ""
@@ -2218,6 +2226,7 @@ fun PurrFectApp() {
                         selectedTab = 3
                     },
                     onEditCat = { selected ->
+                        editReturnPage = "myCatProfiles"
                         catProfile = selected
                         currentPage = "edit"
                     }
@@ -2345,7 +2354,10 @@ fun PurrFectApp() {
                 EditCatProfileScreen(
                     profile = catProfile,
                     onBack = {
-                        currentPage = "main"
+                        currentPage = editReturnPage
+                        if (editReturnPage == "main") {
+                            selectedTab = 3
+                        }
                     },
                     onSave = { updatedProfile ->
                         scope.launch {
@@ -2383,17 +2395,19 @@ fun PurrFectApp() {
                                     )
                                 }
 
-// Re-fetch the complete profile so the uploaded image
-// and all backend values are immediately reflected.
-                                catProfile = if (wasCreating) {
-                                    savedProfile
-                                } else {
-                                    PurrFectApi.getCatByUserId(
-                                        loggedInUser?.id ?: 0
-                                    ) ?: savedProfile
+// Keep the exact backend result from this save operation.
+// Do not immediately re-fetch here because a stale profile response
+// could overwrite the values that were just saved. Preserve the
+// locally selected photo and adoption intent as well.
+                                catProfile = savedProfile.copy(
+                                    photoUrl = updatedProfile.photoUrl ?: savedProfile.photoUrl,
+                                    photoBitmap = updatedProfile.photoBitmap ?: savedProfile.photoBitmap,
+                                    adoptionIntent = updatedProfile.adoptionIntent
+                                )
+                                currentPage = editReturnPage
+                                if (editReturnPage == "main") {
+                                    selectedTab = 3
                                 }
-                                currentPage = "main"
-                                selectedTab = 3
                                 Toast.makeText(
                                     context,
                                     if (wasCreating) {
@@ -3271,18 +3285,59 @@ fun WelcomeScreen(
         )
 
         /* =================================================
-        PURRFECT LOGO
+        MAIN PAW LOGO
         ================================================= */
-        Image(
-            painter = painterResource(R.drawable.purrfect_logo),
-            contentDescription = "PurrFect logo",
-            contentScale = ContentScale.Fit,
+        Box(
             modifier = Modifier
-                .fillMaxWidth(0.72f)
-                .height(150.dp)
+                .size(92.dp)
                 .align(Alignment.TopCenter)
-                .offset(y = screenHeight * 0.135f)
-        )
+                .offset(y = screenHeight * 0.135f),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = Icons.Outlined.Pets,
+                contentDescription = "Purr-fect",
+                tint = purrFectColor(Color(0xFFFF4F79), Color(0xFFF45A9A)),
+                modifier = Modifier.size(82.dp)
+            )
+
+            Icon(
+                imageVector = Icons.Filled.Favorite,
+                contentDescription = null,
+                tint = Color.White,
+                modifier = Modifier
+                    .size(24.dp)
+                    .offset(y = 8.dp)
+            )
+        }
+
+        /* =================================================
+        APP NAME
+        ================================================= */
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .align(Alignment.TopCenter)
+                .offset(y = screenHeight * 0.245f),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Purr",
+                color = purrFectColor(Color(0xFF18142E), Color(0xFF151326)),
+                fontSize = 39.sp,
+                fontWeight = FontWeight.ExtraBold,
+                letterSpacing = (-1.1).sp
+            )
+
+            Text(
+                text = "Fect",
+                color = purrFectColor(Color(0xFFFF4F79), Color(0xFFF45A9A)),
+                fontSize = 39.sp,
+                fontWeight = FontWeight.ExtraBold,
+                letterSpacing = (-1.1).sp
+            )
+        }
 
         /* =================================================
         TAGLINE
@@ -8776,27 +8831,15 @@ fun MyCatScreen(
                             modifier =
                                 Modifier.width(5.dp)
                         )
-                        Text(
-                            text =
-                                if (
-                                    profile.gender ==
-                                    "Female"
-                                ) {
-                                    "🐾"
-                                } else {
-                                    "🐾"
-                                },
-                            color =
-                                if (
-                                    profile.gender ==
-                                    "Female"
-                                ) {
-                                    Pink
-                                } else {
-                                    purrFectColor(Color(0xFF638BC7), Color(0xFF709DE0))
-                                },
-                            fontSize =
-                                18.sp
+                        Icon(
+                            imageVector = Icons.Outlined.Pets,
+                            contentDescription = null,
+                            tint = if (profile.gender == "Female") {
+                                Pink
+                            } else {
+                                purrFectColor(Color(0xFF638BC7), Color(0xFF709DE0))
+                            },
+                            modifier = Modifier.size(19.dp)
                         )
                     }
                     Spacer(
@@ -8868,7 +8911,7 @@ fun MyCatScreen(
                 value =
                     profile.personality,
                 icon =
-                    "_"
+                    ""
             )
             InfoRow(
                 title =
@@ -8876,7 +8919,7 @@ fun MyCatScreen(
                 value =
                     profile.activities,
                 icon =
-                    "😊"
+                    ""
             )
             InfoRow(
                 title =
@@ -8884,7 +8927,7 @@ fun MyCatScreen(
                 value =
                     profile.health,
                 icon =
-                    "🐾"
+                    ""
             )
             InfoRow(
                 title =
@@ -8892,7 +8935,7 @@ fun MyCatScreen(
                 value =
                     profile.lookingFor,
                 icon =
-                    "❤"
+                    ""
             )
         }
         BottomNavigation(
@@ -11240,35 +11283,63 @@ fun ProfileSection(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(
-                horizontal = 24.dp,
-                vertical = 13.dp
+            .padding(horizontal = 20.dp, vertical = 8.dp)
+            .clip(RoundedCornerShape(24.dp))
+            .background(
+                purrFectColor(
+                    Color(0xFFFFF5F5),
+                    Color(0xFF211E35)
+                )
             )
+            .border(
+                1.dp,
+                purrFectColor(
+                    Color(0xFFF7DFE3),
+                    Color(0xFF3A344D)
+                ),
+                RoundedCornerShape(24.dp)
+            )
+            .padding(horizontal = 18.dp, vertical = 16.dp)
     ) {
-        Text(
-            text =
-                title,
-            color =
-                TextDark,
-            fontSize =
-                13.sp,
-            fontWeight =
-                FontWeight.Bold
-        )
-        Spacer(
-            modifier =
-                Modifier.height(6.dp)
-        )
-        Text(
-            text =
-                content,
-            color =
-                TextGrey,
-            fontSize =
-                12.sp,
-            lineHeight =
-                18.sp
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    color = TextDark,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.height(5.dp))
+                Text(
+                    text = content.ifBlank { "No information added yet." },
+                    color = TextGrey,
+                    fontSize = 12.sp,
+                    lineHeight = 18.sp
+                )
+            }
+            Box(
+                modifier = Modifier
+                    .size(48.dp)
+                    .clip(CircleShape)
+                    .background(
+                        purrFectColor(
+                            Color(0xFFFFE5EA),
+                            Color(0xFF302A46)
+                        )
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.Pets,
+                    contentDescription = null,
+                    tint = purrFectColor(Color(0xFFE95270), Color(0xFFF45A9A)),
+                    modifier = Modifier.size(23.dp)
+                )
+            }
+        }
     }
 }
 /* =========================================================
@@ -11280,46 +11351,89 @@ fun InfoRow(
     value: String,
     icon: String
 ) {
-    Row(
+    val accent = when (title) {
+        "Personality" -> purrFectColor(Color(0xFFE95270), Color(0xFFF45A9A))
+        "Favorite Activities" -> purrFectColor(Color(0xFFC58A28), Color(0xFFE0A94B))
+        "Health Info" -> purrFectColor(Color(0xFF4C82C7), Color(0xFF78A9E5))
+        else -> purrFectColor(Color(0xFFE85B73), Color(0xFFF47A99))
+    }
+
+    val iconBackground = when (title) {
+        "Personality" -> purrFectColor(Color(0xFFFFE4EA), Color(0xFF302A46))
+        "Favorite Activities" -> purrFectColor(Color(0xFFFFEFD2), Color(0xFF352F40))
+        "Health Info" -> purrFectColor(Color(0xFFE2F0FF), Color(0xFF29364C))
+        else -> purrFectColor(Color(0xFFFFE5EA), Color(0xFF302A46))
+    }
+
+    val icon = when (title) {
+        "Personality" -> Icons.Outlined.PersonOutline
+        "Favorite Activities" -> Icons.Outlined.StarBorder
+        "Health Info" -> Icons.Outlined.Shield
+        else -> Icons.Outlined.Favorite
+    }
+
+    Box(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(
-                horizontal = 24.dp,
-                vertical = 13.dp
-            ),
-        verticalAlignment =
-            Alignment.CenterVertically
+            .padding(horizontal = 20.dp, vertical = 7.dp)
+            .clip(RoundedCornerShape(24.dp))
+            .background(
+                purrFectColor(
+                    Color(0xFFFFFCFA),
+                    Color(0xFF211E35)
+                )
+            )
+            .border(
+                1.dp,
+                purrFectColor(
+                    when (title) {
+                        "Personality" -> Color(0xFFF5DDE2)
+                        "Favorite Activities" -> Color(0xFFF5E5C9)
+                        "Health Info" -> Color(0xFFDCEBFA)
+                        else -> Color(0xFFF5DDE2)
+                    },
+                    Color(0xFF3A344D)
+                ),
+                RoundedCornerShape(24.dp)
+            )
+            .padding(horizontal = 14.dp, vertical = 14.dp)
     ) {
-        Text(
-            text =
-                icon,
-            color =
-                Pink,
-            fontSize =
-                18.sp,
-            modifier =
-                Modifier.width(35.dp)
-        )
-        Text(
-            text =
-                title,
-            color =
-                TextDark,
-            fontSize =
-                11.sp,
-            fontWeight =
-                FontWeight.SemiBold,
-            modifier =
-                Modifier.width(125.dp)
-        )
-        Text(
-            text =
-                value,
-            color =
-                TextGrey,
-            fontSize =
-                10.sp
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(64.dp)
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(iconBackground),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = accent,
+                    modifier = Modifier.size(29.dp)
+                )
+            }
+
+            Spacer(modifier = Modifier.width(16.dp))
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    color = TextDark,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = value.ifBlank { "Not added" },
+                    color = TextGrey,
+                    fontSize = 12.sp
+                )
+            }
+        }
     }
 }
 /* =========================================================
@@ -12673,3 +12787,5 @@ fun NotificationsScreen(
         }
     }
 }
+
+
