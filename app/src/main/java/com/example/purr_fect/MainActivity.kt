@@ -1,4 +1,3 @@
-
 package com.example.purr_fect
 import android.content.Intent
 import android.app.NotificationChannel
@@ -42,6 +41,7 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -67,6 +67,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Close
@@ -85,6 +89,19 @@ import androidx.compose.material.icons.outlined.Send
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material.icons.outlined.Tune
+import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.Notifications
+import androidx.compose.material.icons.outlined.DarkMode
+import androidx.compose.material.icons.outlined.Language
+import androidx.compose.material.icons.outlined.LocationOn
+import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Shield
+import androidx.compose.material.icons.outlined.HelpOutline
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Description
+import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material.icons.outlined.Logout
+import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -92,6 +109,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.Switch
@@ -111,6 +130,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
@@ -177,6 +197,68 @@ private const val SESSION_USER_ID = "user_id"
 private const val SESSION_USER_NAME = "user_name"
 private const val SESSION_USER_EMAIL = "user_email"
 private const val SESSION_CAT_ID = "cat_id"
+
+// =========================================================
+// NOTIFICATION PREFERENCES
+// Stored locally so the existing backend notification system
+// remains unchanged. These preferences control what the app
+// surfaces as system notifications.
+// =========================================================
+private const val PREF_NOTIFICATIONS_MASTER = "settings_notifications_enabled"
+private const val PREF_NOTIFICATIONS_MATCHES = "settings_notifications_matches"
+private const val PREF_NOTIFICATIONS_MESSAGES = "settings_notifications_messages"
+private const val PREF_NOTIFICATIONS_LIKES = "settings_notifications_likes"
+private const val PREF_NOTIFICATIONS_ADOPTION = "settings_notifications_adoption"
+private const val PREF_NOTIFICATIONS_GENERAL = "settings_notifications_general"
+
+// =========================================================
+// PRIVACY PREFERENCES
+// Online-status visibility is connected to the existing presence
+// heartbeat. Other privacy controls are informational until the
+// backend exposes matching server-side controls.
+// =========================================================
+private const val PREF_PRIVACY_ONLINE_STATUS = "privacy_online_status_enabled"
+
+private fun notificationPreferences(context: Context) =
+    context.getSharedPreferences(PURR_FECT_SESSION_PREFS, Context.MODE_PRIVATE)
+
+private fun notificationCategoryEnabled(context: Context, type: String): Boolean {
+    val prefs = notificationPreferences(context)
+    if (!prefs.getBoolean(PREF_NOTIFICATIONS_MASTER, true)) return false
+
+    return when {
+        type.equals("match", ignoreCase = true) ->
+            prefs.getBoolean(PREF_NOTIFICATIONS_MATCHES, true)
+        type.equals("message", ignoreCase = true) ->
+            prefs.getBoolean(PREF_NOTIFICATIONS_MESSAGES, true)
+        type.equals("like", ignoreCase = true) ||
+                type.equals("star", ignoreCase = true) ->
+            prefs.getBoolean(PREF_NOTIFICATIONS_LIKES, true)
+        type.startsWith("adoption", ignoreCase = true) ->
+            prefs.getBoolean(PREF_NOTIFICATIONS_ADOPTION, true)
+        else ->
+            prefs.getBoolean(PREF_NOTIFICATIONS_GENERAL, true)
+    }
+}
+
+private fun saveNotificationPreferences(
+    context: Context,
+    master: Boolean? = null,
+    matches: Boolean? = null,
+    messages: Boolean? = null,
+    likes: Boolean? = null,
+    adoption: Boolean? = null,
+    general: Boolean? = null
+) {
+    notificationPreferences(context).edit().apply {
+        master?.let { putBoolean(PREF_NOTIFICATIONS_MASTER, it) }
+        matches?.let { putBoolean(PREF_NOTIFICATIONS_MATCHES, it) }
+        messages?.let { putBoolean(PREF_NOTIFICATIONS_MESSAGES, it) }
+        likes?.let { putBoolean(PREF_NOTIFICATIONS_LIKES, it) }
+        adoption?.let { putBoolean(PREF_NOTIFICATIONS_ADOPTION, it) }
+        general?.let { putBoolean(PREF_NOTIFICATIONS_GENERAL, it) }
+    }.apply()
+}
 
 private fun loadSavedUser(context: android.content.Context): BackendUser? {
     val prefs = context.getSharedPreferences(
@@ -614,6 +696,40 @@ private object PurrFectApi {
         }
         return photos.optJSONObject(0)?.optString("photo_url", null)
     }
+    suspend fun forgotPassword(email: String): JSONObject {
+        return postJson(
+            "/api/forgot-password",
+            JSONObject().apply {
+                put("email", email.trim().lowercase(Locale.US))
+            }
+        )
+    }
+
+    suspend fun verifyResetOtp(email: String, otp: String): JSONObject {
+        return postJson(
+            "/api/verify-reset-otp",
+            JSONObject().apply {
+                put("email", email.trim().lowercase(Locale.US))
+                put("otp", otp.trim())
+            }
+        )
+    }
+
+    suspend fun resetPassword(
+        email: String,
+        resetToken: String,
+        newPassword: String
+    ): JSONObject {
+        return postJson(
+            "/api/reset-password",
+            JSONObject().apply {
+                put("email", email.trim().lowercase(Locale.US))
+                put("reset_token", resetToken.trim())
+                put("new_password", newPassword)
+            }
+        )
+    }
+
     suspend fun getCatByUserId(userId: Int): CatProfile? {
         return try {
             val response = getJson("/api/users/$userId/cat")
@@ -1171,6 +1287,40 @@ private object PurrFectApi {
         }
     }
 
+    suspend fun getCatProfilesByUserId(userId: Int): List<CatProfile> {
+        return try {
+            val response = getJson("/api/users/$userId/cats")
+            val array = response.optJSONArray("cats") ?: return emptyList()
+            buildList {
+                for (index in 0 until array.length()) {
+                    val cat = array.optJSONObject(index) ?: continue
+                    val photos = cat.optJSONArray("photos")
+                    val photoUrl = findPrimaryPhotoUrl(photos)
+                    val photoBitmap = if (!photoUrl.isNullOrBlank()) downloadBitmap(photoUrl) else null
+                    add(
+                        CatProfile(
+                            id = cat.optInt("id", 0),
+                            name = cleanCatText(cat.optString("name", null), "My Cat"),
+                            gender = cleanCatText(cat.optString("gender", null), "Male"),
+                            breed = cleanCatText(cat.optString("breed", null), "Breed not added"),
+                            age = cleanCatText(cat.optString("age", null), "0"),
+                            about = cleanCatText(cat.optString("bio", null), "No information added yet."),
+                            personality = cleanCatText(cat.optString("personality", null), "Not added"),
+                            activities = cleanCatText(cat.optString("activities", null), "Not added"),
+                            health = cleanCatText(cat.optString("health", null), "Not added"),
+                            lookingFor = cleanCatText(cat.optString("looking_for", null), "Not added"),
+                            photoUrl = photoUrl,
+                            photoBitmap = photoBitmap,
+                            adoptionIntent = cleanCatText(cat.optString("adoption_intent", null), "none")
+                        )
+                    )
+                }
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
     suspend fun createCat(
         userId: Int,
         profile: CatProfile
@@ -1376,10 +1526,20 @@ class MainActivity : ComponentActivity() {
         presenceJob = presenceScope.launch {
             while (true) {
                 val catId = currentCatId()
-                if (catId > 0) {
+                val onlineStatusEnabled = getSharedPreferences(
+                    PURR_FECT_SESSION_PREFS,
+                    Context.MODE_PRIVATE
+                ).getBoolean(PREF_PRIVACY_ONLINE_STATUS, true)
+                if (catId > 0 && onlineStatusEnabled) {
                     PurrFectApi.updatePresence(catId, "online")
                     delay(30_000L)
-                    PurrFectApi.sendPresenceHeartbeat(catId)
+                    if (getSharedPreferences(PURR_FECT_SESSION_PREFS, Context.MODE_PRIVATE)
+                            .getBoolean(PREF_PRIVACY_ONLINE_STATUS, true)) {
+                        PurrFectApi.sendPresenceHeartbeat(catId)
+                    }
+                } else if (catId > 0) {
+                    PurrFectApi.updatePresence(catId, "offline")
+                    delay(2_000L)
                 } else {
                     delay(2_000L)
                 }
@@ -1396,17 +1556,25 @@ class MainActivity : ComponentActivity() {
     }
 }
 /* =========================================================
+DARK MODE STATE / THEME HELPER
+========================================================= */
+private var purrFectDarkMode by mutableStateOf(false)
+
+private fun purrFectColor(light: Color, dark: Color): Color =
+    if (purrFectDarkMode) dark else light
+
+/* =========================================================
 COLORS
 ========================================================= */
-private val BackgroundColor = Color(0xFFFFF8F4)
-private val CardColor = Color(0xFFFFFCFA)
-private val Pink = Color(0xFFE95D78)
-private val Purple = Color(0xFF8057C7)
-private val TextDark = Color(0xFF292329)
-private val TextGrey = Color(0xFF756D70)
-private val LightPink = Color(0xFFFFE9EC)
-private val BorderColor = Color(0xFFEDE4E0)
-private val StarYellow = Color(0xFFFFC107)
+private val BackgroundColor: Color get() = purrFectColor(Color(0xFFFFF8F4), Color(0xFF151326))
+private val CardColor: Color get() = purrFectColor(Color(0xFFFFFCFA), Color(0xFF211E35))
+private val Pink: Color get() = purrFectColor(Color(0xFFE95D78), Color(0xFFF45A9A))
+private val Purple: Color get() = purrFectColor(Color(0xFF8057C7), Color(0xFF9A63DC))
+private val TextDark: Color get() = purrFectColor(Color(0xFF292329), Color(0xFFF7F3FA))
+private val TextGrey: Color get() = purrFectColor(Color(0xFF756D70), Color(0xFFA8A3B5))
+private val LightPink: Color get() = purrFectColor(Color(0xFFFFE9EC), Color(0xFF211E35))
+private val BorderColor: Color get() = purrFectColor(Color(0xFFEDE4E0), Color(0xFF3A344D))
+private val StarYellow: Color get() = purrFectColor(Color(0xFFFFC107), Color(0xFFF4C95B))
 /* =========================================================
 CAT PROFILE DATA
 ========================================================= */
@@ -1560,6 +1728,53 @@ fun PurrFectApp() {
     var loggedInUser by remember {
         mutableStateOf<BackendUser?>(savedUser)
     }
+    var settingsNotificationsEnabled by remember {
+        mutableStateOf(
+            notificationPreferences(context)
+                .getBoolean(PREF_NOTIFICATIONS_MASTER, true)
+        )
+    }
+    var notificationMatchesEnabled by remember {
+        mutableStateOf(notificationPreferences(context).getBoolean(PREF_NOTIFICATIONS_MATCHES, true))
+    }
+    var notificationMessagesEnabled by remember {
+        mutableStateOf(notificationPreferences(context).getBoolean(PREF_NOTIFICATIONS_MESSAGES, true))
+    }
+    var notificationLikesEnabled by remember {
+        mutableStateOf(notificationPreferences(context).getBoolean(PREF_NOTIFICATIONS_LIKES, true))
+    }
+    var notificationAdoptionEnabled by remember {
+        mutableStateOf(notificationPreferences(context).getBoolean(PREF_NOTIFICATIONS_ADOPTION, true))
+    }
+    var notificationGeneralEnabled by remember {
+        mutableStateOf(notificationPreferences(context).getBoolean(PREF_NOTIFICATIONS_GENERAL, true))
+    }
+    var settingsDarkModeEnabled by remember {
+        mutableStateOf(
+            context.getSharedPreferences(PURR_FECT_SESSION_PREFS, Context.MODE_PRIVATE)
+                .getBoolean("settings_dark_mode_enabled", false)
+        )
+    }
+    var settingsDistanceUnit by remember {
+        mutableStateOf(
+            context.getSharedPreferences(PURR_FECT_SESSION_PREFS, Context.MODE_PRIVATE)
+                .getString("settings_distance_unit", "Kilometres (km)")
+                ?: "Kilometres (km)"
+        )
+    }
+    var settingsLanguage by remember {
+        mutableStateOf(
+            context.getSharedPreferences(PURR_FECT_SESSION_PREFS, Context.MODE_PRIVATE)
+                .getString("settings_language", "English")
+                ?: "English"
+        )
+    }
+    var privacyOnlineStatusEnabled by remember {
+        mutableStateOf(
+            context.getSharedPreferences(PURR_FECT_SESSION_PREFS, Context.MODE_PRIVATE)
+                .getBoolean(PREF_PRIVACY_ONLINE_STATUS, true)
+        )
+    }
 
     LaunchedEffect(catProfile.id) {
         if (catProfile.id > 0) {
@@ -1568,6 +1783,10 @@ fun PurrFectApp() {
         }
     }
 
+
+    LaunchedEffect(settingsDarkModeEnabled) {
+        purrFectDarkMode = settingsDarkModeEnabled
+    }
 
     val scope = rememberCoroutineScope()
 
@@ -1635,9 +1854,12 @@ fun PurrFectApp() {
                             item.id !in knownNotificationIds
                 }
 
-                newNotifications.take(5).forEach { item ->
-                    showPurrFectSystemNotification(context, item)
-                }
+                newNotifications
+                    .filter { item -> notificationCategoryEnabled(context, item.type) }
+                    .take(5)
+                    .forEach { item ->
+                        showPurrFectSystemNotification(context, item)
+                    }
 
                 notificationItems = latestNotifications
                 notificationUnreadCount =
@@ -1650,7 +1872,7 @@ fun PurrFectApp() {
     AnimatedContent(
         targetState = currentPage,
         transitionSpec = {
-            val forwardPages = setOf("welcome", "signup", "login", "edit", "catProfile", "compatibility", "chat", "starred", "adoption", "adoptionDetails")
+            val forwardPages = setOf("welcome", "signup", "login", "edit", "catProfile", "compatibility", "chat", "starred", "adoption", "adoptionDetails", "about", "helpSupport")
             val isForward = targetState in forwardPages && targetState != initialState
 
             if (isForward) {
@@ -1833,6 +2055,9 @@ fun PurrFectApp() {
                             onEditProfile = {
                                 currentPage = "edit"
                             },
+                            onSettingsClick = {
+                                currentPage = "settings"
+                            },
                             onTabSelected = {
                                 selectedTab = it
                             }
@@ -1880,6 +2105,176 @@ fun PurrFectApp() {
                         )
                     }
                 }
+            }
+            "settings" -> {
+                SettingsScreen(
+                    profile = catProfile,
+                    user = loggedInUser,
+                    onBack = {
+                        currentPage = "main"
+                        selectedTab = 3
+                    },
+                    onEditProfile = {
+                        currentPage = "edit"
+                    },
+                    onMyCatProfiles = {
+                        currentPage = "myCatProfiles"
+                    },
+                    onAccountSecurity = {
+                        currentPage = "accountSecurity"
+                    },
+                    notificationsEnabled = settingsNotificationsEnabled,
+                    onNotificationsEnabledChange = { enabled ->
+                        settingsNotificationsEnabled = enabled
+                        saveNotificationPreferences(context, master = enabled)
+                        if (!enabled) {
+                            val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                            manager.cancelAll()
+                        }
+                    },
+                    darkModeEnabled = settingsDarkModeEnabled,
+                    onDarkModeEnabledChange = { enabled ->
+                        settingsDarkModeEnabled = enabled
+                        context.getSharedPreferences(PURR_FECT_SESSION_PREFS, Context.MODE_PRIVATE)
+                            .edit()
+                            .putBoolean("settings_dark_mode_enabled", enabled)
+                            .apply()
+                    },
+                    distanceUnit = settingsDistanceUnit,
+                    onDistanceUnitChange = { unit ->
+                        settingsDistanceUnit = unit
+                        context.getSharedPreferences(PURR_FECT_SESSION_PREFS, Context.MODE_PRIVATE)
+                            .edit()
+                            .putString("settings_distance_unit", unit)
+                            .apply()
+                    },
+                    language = settingsLanguage,
+                    onLanguageChange = { language ->
+                        settingsLanguage = language
+                        context.getSharedPreferences(PURR_FECT_SESSION_PREFS, Context.MODE_PRIVATE)
+                            .edit()
+                            .putString("settings_language", language)
+                            .apply()
+                    },
+                    onNotificationsPage = {
+                        currentPage = "notificationSettings"
+                    },
+                    onPrivacyPage = {
+                        currentPage = "privacy"
+                    },
+                    onHelpSupportPage = {
+                        currentPage = "helpSupport"
+                    },
+                    onAboutPage = {
+                        currentPage = "about"
+                    },
+                    onLogout = {
+                        clearUserSession(context)
+                        loggedInUser = null
+                        catProfile = CatProfile(
+                            id = 0,
+                            name = "",
+                            gender = "",
+                            breed = "",
+                            age = "",
+                            about = "",
+                            personality = "",
+                            activities = "",
+                            health = "",
+                            lookingFor = ""
+                        )
+                        currentPage = "welcome"
+                        selectedTab = 0
+                    }
+                )
+            }
+            "myCatProfiles" -> {
+                var myCatProfiles by remember { mutableStateOf<List<CatProfile>>(emptyList()) }
+                LaunchedEffect(loggedInUser?.id) {
+                    val userId = loggedInUser?.id ?: 0
+                    if (userId > 0) {
+                        myCatProfiles = PurrFectApi.getCatProfilesByUserId(userId)
+                    } else {
+                        myCatProfiles = emptyList()
+                    }
+                }
+
+                MyCatProfilesScreen(
+                    cats = myCatProfiles,
+                    activeCatId = catProfile.id,
+                    onBack = { currentPage = "settings" },
+                    onAddCat = {
+                        catProfile = CatProfile(
+                            id = 0, name = "", gender = "", breed = "", age = "",
+                            about = "", personality = "", activities = "", health = "", lookingFor = ""
+                        )
+                        currentPage = "edit"
+                    },
+                    onSelectCat = { selected ->
+                        catProfile = selected
+                        context.getSharedPreferences(PURR_FECT_SESSION_PREFS, Context.MODE_PRIVATE)
+                            .edit().putInt(SESSION_CAT_ID, selected.id).apply()
+                        currentPage = "main"
+                        selectedTab = 3
+                    },
+                    onEditCat = { selected ->
+                        catProfile = selected
+                        currentPage = "edit"
+                    }
+                )
+            }
+            "privacy" -> {
+                PrivacyScreen(
+                    onlineStatusEnabled = privacyOnlineStatusEnabled,
+                    onOnlineStatusChange = { enabled ->
+                        privacyOnlineStatusEnabled = enabled
+                        context.getSharedPreferences(PURR_FECT_SESSION_PREFS, Context.MODE_PRIVATE)
+                            .edit()
+                            .putBoolean(PREF_PRIVACY_ONLINE_STATUS, enabled)
+                            .apply()
+                        if (!enabled && catProfile.id > 0) {
+                            scope.launch {
+                                PurrFectApi.updatePresence(catProfile.id, "offline")
+                            }
+                        }
+                    },
+                    onAccountSecurity = { currentPage = "accountSecurity" },
+                    onBack = { currentPage = "settings" }
+                )
+            }
+            "helpSupport" -> {
+                HelpSupportScreen(
+                    onBack = { currentPage = "settings" }
+                )
+            }
+            "about" -> {
+                AboutPurrFectScreen(
+                    onBack = { currentPage = "settings" }
+                )
+            }
+            "accountSecurity" -> {
+                AccountSecurityScreen(
+                    user = loggedInUser,
+                    onBack = { currentPage = "settings" },
+                    onLogout = {
+                        clearUserSession(context)
+                        loggedInUser = null
+                        catProfile = CatProfile(
+                            id = 0,
+                            name = "",
+                            gender = "",
+                            breed = "",
+                            age = "",
+                            about = "",
+                            personality = "",
+                            activities = "",
+                            health = "",
+                            lookingFor = ""
+                        )
+                        currentPage = "welcome"
+                        selectedTab = 0
+                    }
+                )
             }
             "starred" -> {
                 StarredCatsScreen(
@@ -1990,10 +2385,13 @@ fun PurrFectApp() {
 
 // Re-fetch the complete profile so the uploaded image
 // and all backend values are immediately reflected.
-                                catProfile =
+                                catProfile = if (wasCreating) {
+                                    savedProfile
+                                } else {
                                     PurrFectApi.getCatByUserId(
                                         loggedInUser?.id ?: 0
                                     ) ?: savedProfile
+                                }
                                 currentPage = "main"
                                 selectedTab = 3
                                 Toast.makeText(
@@ -2028,13 +2426,50 @@ fun PurrFectApp() {
                     )
                 }
             }
+            "notificationSettings" -> {
+                NotificationSettingsScreen(
+                    notificationsEnabled = settingsNotificationsEnabled,
+                    matchesEnabled = notificationMatchesEnabled,
+                    messagesEnabled = notificationMessagesEnabled,
+                    likesEnabled = notificationLikesEnabled,
+                    adoptionEnabled = notificationAdoptionEnabled,
+                    generalEnabled = notificationGeneralEnabled,
+                    onMasterNotificationChange = { enabled ->
+                        settingsNotificationsEnabled = enabled
+                        saveNotificationPreferences(context, master = enabled)
+                        if (!enabled) {
+                            val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                            manager.cancelAll()
+                        }
+                    },
+                    onMatchesChange = { enabled ->
+                        notificationMatchesEnabled = enabled
+                        saveNotificationPreferences(context, matches = enabled)
+                    },
+                    onMessagesChange = { enabled ->
+                        notificationMessagesEnabled = enabled
+                        saveNotificationPreferences(context, messages = enabled)
+                    },
+                    onLikesChange = { enabled ->
+                        notificationLikesEnabled = enabled
+                        saveNotificationPreferences(context, likes = enabled)
+                    },
+                    onAdoptionChange = { enabled ->
+                        notificationAdoptionEnabled = enabled
+                        saveNotificationPreferences(context, adoption = enabled)
+                    },
+                    onGeneralChange = { enabled ->
+                        notificationGeneralEnabled = enabled
+                        saveNotificationPreferences(context, general = enabled)
+                    },
+                    onBack = { currentPage = "settings" }
+                )
+            }
             "notifications" -> {
                 NotificationsScreen(
                     notifications = notificationItems,
                     unreadCount = notificationUnreadCount,
-                    onBack = {
-                        currentPage = "main"
-                    },
+                    onBack = { currentPage = "main" },
                     onMarkRead = { notificationId ->
                         scope.launch {
                             if (PurrFectApi.markNotificationRead(catProfile.id, notificationId)) {
@@ -2164,7 +2599,7 @@ fun PurrFectApp() {
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(17.dp))
-                        .background(Color.White)
+                        .background(CardColor)
                         .border(1.dp, BorderColor, RoundedCornerShape(17.dp))
                         .clickable {
                             isSideMenuOpen = false
@@ -2203,7 +2638,7 @@ fun PurrFectApp() {
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(17.dp))
-                        .background(Color.White)
+                        .background(CardColor)
                         .border(1.dp, BorderColor, RoundedCornerShape(17.dp))
                         .clickable {
                             isSideMenuOpen = false
@@ -2242,7 +2677,7 @@ fun PurrFectApp() {
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(17.dp))
-                        .background(Color.White)
+                        .background(CardColor)
                         .border(1.dp, BorderColor, RoundedCornerShape(17.dp))
                         .clickable {
                             isSideMenuOpen = false
@@ -2254,7 +2689,7 @@ fun PurrFectApp() {
                     Icon(
                         imageVector = Icons.Outlined.Pets,
                         contentDescription = null,
-                        tint = Color(0xFF4CAF50),
+                        tint = purrFectColor(Color(0xFF4CAF50), Color(0xFF61E067)),
                         modifier = Modifier.size(26.dp)
                     )
                     Spacer(modifier = Modifier.width(14.dp))
@@ -2274,7 +2709,7 @@ fun PurrFectApp() {
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(17.dp))
-                            .background(Color.White)
+                            .background(CardColor)
                             .border(1.dp, BorderColor, RoundedCornerShape(17.dp))
                             .clickable {
                                 clearUserSession(context)
@@ -2350,7 +2785,7 @@ fun PurrFectApp() {
                             },
                             modifier = Modifier.fillMaxWidth(),
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = Color(0xFF4CAF50)
+                                containerColor = purrFectColor(Color(0xFF4CAF50), Color(0xFF61E067))
                             ),
                             shape = RoundedCornerShape(17.dp)
                         ) {
@@ -2561,7 +2996,7 @@ fun StarredCatsScreen(
                             .fillMaxWidth()
                             .height(104.dp)
                             .clip(RoundedCornerShape(20.dp))
-                            .background(Color.White)
+                            .background(CardColor)
                             .border(1.dp, BorderColor, RoundedCornerShape(20.dp))
                             .clickable { onCatClick(cat) }
                             .padding(10.dp),
@@ -2588,7 +3023,7 @@ fun StarredCatsScreen(
                                 Box(
                                     modifier = Modifier
                                         .fillMaxSize()
-                                        .background(Color(0xFFFFF1E7)),
+                                        .background(purrFectColor(Color(0xFFFFF1E7), Color(0xFF211E35))),
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Icon(
@@ -2671,7 +3106,7 @@ fun WelcomeScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFFFFF9F6))
+            .background(purrFectColor(Color(0xFFFFF9F6), Color(0xFF151326)))
             .graphicsLayer {
                 alpha = welcomeEntrance.value
                 val scale = 0.98f + (0.02f * welcomeEntrance.value)
@@ -2690,7 +3125,7 @@ fun WelcomeScreen(
                     y = (-25).dp
                 )
                 .clip(CircleShape)
-                .background(Color(0xFFFFE8E5))
+                .background(purrFectColor(Color(0xFFFFE8E5), Color(0xFF211E35)))
         )
 
         Box(
@@ -2701,7 +3136,7 @@ fun WelcomeScreen(
                     y = screenHeight * 0.16f
                 )
                 .clip(CircleShape)
-                .background(Color(0xFFFFE9E8))
+                .background(purrFectColor(Color(0xFFFFE9E8), Color(0xFF211E35)))
         )
 
         Box(
@@ -2712,7 +3147,7 @@ fun WelcomeScreen(
                     y = screenHeight * 0.72f
                 )
                 .clip(CircleShape)
-                .background(Color(0xFFFFE9E8))
+                .background(purrFectColor(Color(0xFFFFE9E8), Color(0xFF211E35)))
         )
 
         Box(
@@ -2723,7 +3158,7 @@ fun WelcomeScreen(
                     y = screenHeight * 0.88f
                 )
                 .clip(CircleShape)
-                .background(Color(0xFFFFE8E5))
+                .background(purrFectColor(Color(0xFFFFE8E5), Color(0xFF211E35)))
         )
 
         /* =================================================
@@ -2750,28 +3185,28 @@ fun WelcomeScreen(
             x = screenWidth * 0.10f,
             y = screenHeight * 0.36f,
             size = 27,
-            color = Color(0xFFFFD86A)
+            color = purrFectColor(Color(0xFFFFD86A), Color(0xFFF4C95B))
         )
         WelcomeStar(
             text = "★",
             x = screenWidth * 0.77f,
             y = screenHeight * 0.15f,
             size = 28,
-            color = Color(0xFFFFD86A)
+            color = purrFectColor(Color(0xFFFFD86A), Color(0xFFF4C95B))
         )
         WelcomeStar(
             text = "★",
             x = screenWidth * 0.78f,
             y = screenHeight * 0.53f,
             size = 27,
-            color = Color(0xFFFFD86A)
+            color = purrFectColor(Color(0xFFFFD86A), Color(0xFFF4C95B))
         )
         WelcomeStar(
             text = "★",
             x = screenWidth * 0.08f,
             y = screenHeight * 0.82f,
             size = 27,
-            color = Color(0xFFFFD86A)
+            color = purrFectColor(Color(0xFFFFD86A), Color(0xFFF4C95B))
         )
 
         WelcomeStar(
@@ -2779,21 +3214,21 @@ fun WelcomeScreen(
             x = screenWidth * 0.82f,
             y = screenHeight * 0.035f,
             size = 31,
-            color = Color(0xFFFF9FBB)
+            color = purrFectColor(Color(0xFFFF9FBB), Color(0xFFFF8FC0))
         )
         WelcomeStar(
             text = "H",
             x = screenWidth * 0.38f,
             y = screenHeight * 0.025f,
             size = 31,
-            color = Color(0xFFFF9FBB)
+            color = purrFectColor(Color(0xFFFF9FBB), Color(0xFFFF8FC0))
         )
         WelcomeStar(
             text = "H",
             x = screenWidth * 0.78f,
             y = screenHeight * 0.82f,
             size = 31,
-            color = Color(0xFFFF9FBB)
+            color = purrFectColor(Color(0xFFFF9FBB), Color(0xFFFF8FC0))
         )
 
         /* =================================================
@@ -2802,7 +3237,7 @@ fun WelcomeScreen(
         Icon(
             imageVector = Icons.Outlined.Pets,
             contentDescription = null,
-            tint = Color(0xFFFF9FBB),
+            tint = purrFectColor(Color(0xFFFF9FBB), Color(0xFFFF8FC0)),
             modifier = Modifier
                 .size(28.dp)
                 .offset(
@@ -2814,7 +3249,7 @@ fun WelcomeScreen(
         Icon(
             imageVector = Icons.Outlined.Pets,
             contentDescription = null,
-            tint = Color(0xFFFF9FBB),
+            tint = purrFectColor(Color(0xFFFF9FBB), Color(0xFFFF8FC0)),
             modifier = Modifier
                 .size(25.dp)
                 .offset(
@@ -2826,7 +3261,7 @@ fun WelcomeScreen(
         Icon(
             imageVector = Icons.Outlined.Pets,
             contentDescription = null,
-            tint = Color(0xFFA98BEF),
+            tint = purrFectColor(Color(0xFFA98BEF), Color(0xFFAA8DE6)),
             modifier = Modifier
                 .size(27.dp)
                 .offset(
@@ -2836,59 +3271,18 @@ fun WelcomeScreen(
         )
 
         /* =================================================
-        MAIN PAW LOGO
+        PURRFECT LOGO
         ================================================= */
-        Box(
+        Image(
+            painter = painterResource(R.drawable.purrfect_logo),
+            contentDescription = "PurrFect logo",
+            contentScale = ContentScale.Fit,
             modifier = Modifier
-                .size(92.dp)
+                .fillMaxWidth(0.72f)
+                .height(150.dp)
                 .align(Alignment.TopCenter)
-                .offset(y = screenHeight * 0.135f),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = Icons.Outlined.Pets,
-                contentDescription = "Purr-fect",
-                tint = Color(0xFFFF4F79),
-                modifier = Modifier.size(82.dp)
-            )
-
-            Icon(
-                imageVector = Icons.Filled.Favorite,
-                contentDescription = null,
-                tint = Color.White,
-                modifier = Modifier
-                    .size(24.dp)
-                    .offset(y = 8.dp)
-            )
-        }
-
-        /* =================================================
-        APP NAME
-        ================================================= */
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .align(Alignment.TopCenter)
-                .offset(y = screenHeight * 0.245f),
-            horizontalArrangement = Arrangement.Center,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = "Purr",
-                color = Color(0xFF18142E),
-                fontSize = 39.sp,
-                fontWeight = FontWeight.ExtraBold,
-                letterSpacing = (-1.1).sp
-            )
-
-            Text(
-                text = "Fect",
-                color = Color(0xFFFF4F79),
-                fontSize = 39.sp,
-                fontWeight = FontWeight.ExtraBold,
-                letterSpacing = (-1.1).sp
-            )
-        }
+                .offset(y = screenHeight * 0.135f)
+        )
 
         /* =================================================
         TAGLINE
@@ -2902,7 +3296,7 @@ fun WelcomeScreen(
         ) {
             Text(
                 text = "Where cats find",
-                color = Color(0xFF514A4A),
+                color = purrFectColor(Color(0xFF514A4A), Color(0xFFC5C0D0)),
                 fontSize = 17.sp,
                 fontWeight = FontWeight.SemiBold,
                 fontStyle = FontStyle.Italic,
@@ -2911,7 +3305,7 @@ fun WelcomeScreen(
 
             Text(
                 text = "Their purrfect match",
-                color = Color(0xFF514A4A),
+                color = purrFectColor(Color(0xFF514A4A), Color(0xFFC5C0D0)),
                 fontSize = 17.sp,
                 fontWeight = FontWeight.SemiBold,
                 fontStyle = FontStyle.Italic,
@@ -2927,13 +3321,13 @@ fun WelcomeScreen(
                         .width(45.dp)
                         .height(2.dp)
                         .clip(RoundedCornerShape(2.dp))
-                        .background(Color(0xFFFFA9C4))
+                        .background(purrFectColor(Color(0xFFFFA9C4), Color(0xFFFF8FC0)))
                 )
 
                 Icon(
                     imageVector = Icons.Outlined.FavoriteBorder,
                     contentDescription = null,
-                    tint = Color(0xFFFF91AF),
+                    tint = purrFectColor(Color(0xFFFF91AF), Color(0xFFFF8FC0)),
                     modifier = Modifier
                         .padding(horizontal = 7.dp)
                         .size(20.dp)
@@ -2944,7 +3338,7 @@ fun WelcomeScreen(
                         .width(45.dp)
                         .height(2.dp)
                         .clip(RoundedCornerShape(2.dp))
-                        .background(Color(0xFFFFA9C4))
+                        .background(purrFectColor(Color(0xFFFFA9C4), Color(0xFFFF8FC0)))
                 )
             }
         }
@@ -2966,7 +3360,7 @@ fun WelcomeScreen(
         Icon(
             imageVector = Icons.Filled.Favorite,
             contentDescription = null,
-            tint = Color(0xFFFF3F72),
+            tint = purrFectColor(Color(0xFFFF3F72), Color(0xFFC73159)),
             modifier = Modifier
                 .size(39.dp)
                 .align(Alignment.TopCenter)
@@ -2985,7 +3379,7 @@ fun WelcomeScreen(
                 .offset(y = screenHeight * 0.695f),
             shape = RoundedCornerShape(30.dp),
             colors = ButtonDefaults.buttonColors(
-                containerColor = Color(0xFFFF4F79)
+                containerColor = purrFectColor(Color(0xFFFF4F79), Color(0xFFF45A9A))
             ),
             elevation = ButtonDefaults.buttonElevation(
                 defaultElevation = 5.dp,
@@ -3022,13 +3416,13 @@ fun WelcomeScreen(
         ) {
             Text(
                 text = "New user? ",
-                color = Color(0xFF777777),
+                color = purrFectColor(Color(0xFF777777), Color(0xFFA8A3B5)),
                 fontSize = 13.sp
             )
 
             Text(
                 text = "Sign Up",
-                color = Color(0xFFFF4F79),
+                color = purrFectColor(Color(0xFFFF4F79), Color(0xFFF45A9A)),
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Bold
             )
@@ -3047,13 +3441,13 @@ fun WelcomeScreen(
         ) {
             Text(
                 text = "Already have an account? ",
-                color = Color(0xFF777777),
+                color = purrFectColor(Color(0xFF777777), Color(0xFFA8A3B5)),
                 fontSize = 13.sp
             )
 
             Text(
                 text = "Login",
-                color = Color(0xFFFF4F79),
+                color = purrFectColor(Color(0xFFFF4F79), Color(0xFFF45A9A)),
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Bold
             )
@@ -3117,7 +3511,7 @@ fun SignupScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFFF4EFF8))
+            .background(purrFectColor(Color(0xFFF4EFF8), Color(0xFF211E35)))
             .verticalScroll(
                 rememberScrollState()
             )
@@ -3139,7 +3533,7 @@ fun SignupScreen(
                     RoundedCornerShape(38.dp)
                 )
                 .background(
-                    Color(0xFFFFF9F4)
+                    purrFectColor(Color(0xFFFFF9F4), Color(0xFF151326))
                 )
         ) {
             Box(
@@ -3154,7 +3548,7 @@ fun SignupScreen(
                         RoundedCornerShape(140.dp)
                     )
                     .background(
-                        Color(0xFFD9C9F4)
+                        purrFectColor(Color(0xFFD9C9F4), Color(0xFF302A46))
                     )
                     .graphicsLayer {
                         rotationZ = -24f
@@ -3182,7 +3576,7 @@ fun SignupScreen(
                 contentDescription =
                     "PurrFect",
                 tint =
-                    Color(0xFFB9A3E8),
+                    purrFectColor(Color(0xFFB9A3E8), Color(0xFFB18AE8)),
                 modifier = Modifier
                     .size(58.dp)
                     .align(Alignment.TopEnd)
@@ -3206,7 +3600,7 @@ fun SignupScreen(
                     text =
                         "Join the\nPurr-fect community!",
                     color =
-                        Color(0xFF202332),
+                        purrFectColor(Color(0xFF202332), Color(0xFFF7F3FA)),
                     fontSize = 30.sp,
                     lineHeight = 37.sp,
                     fontWeight =
@@ -3220,7 +3614,7 @@ fun SignupScreen(
                     text =
                         "Create your account to find your\npurr-fect match.",
                     color =
-                        Color(0xFF4D4C53),
+                        purrFectColor(Color(0xFF4D4C53), Color(0xFFC5C0D0)),
                     fontSize = 16.sp,
                     lineHeight = 25.sp
                 )
@@ -3444,7 +3838,7 @@ fun SignupScreen(
                     colors =
                         ButtonDefaults.buttonColors(
                             containerColor =
-                                Color(0xFFE85E78)
+                                purrFectColor(Color(0xFFE85E78), Color(0xFFF45A9A))
                         )
                 ) {
                     Text(
@@ -3487,14 +3881,14 @@ fun SignupScreen(
                             .weight(1f)
                             .height(1.dp)
                             .background(
-                                Color(0xFFE4DCD8)
+                                purrFectColor(Color(0xFFE4DCD8), Color(0xFF302A46))
                             )
                     )
                     Text(
                         text =
                             " or continue with ",
                         color =
-                            Color(0xFF5C5960),
+                            purrFectColor(Color(0xFF5C5960), Color(0xFFA8A3B5)),
                         fontSize =
                             14.sp
                     )
@@ -3503,7 +3897,7 @@ fun SignupScreen(
                             .weight(1f)
                             .height(1.dp)
                             .background(
-                                Color(0xFFE4DCD8)
+                                purrFectColor(Color(0xFFE4DCD8), Color(0xFF302A46))
                             )
                     )
                 }
@@ -3523,7 +3917,7 @@ fun SignupScreen(
                         modifier =
                             Modifier.weight(1f),
                         symbolColor =
-                            Color(0xFF4285F4),
+                            purrFectColor(Color(0xFF4285F4), Color(0xFF3D7AE0)),
                         onClick = {
                             if (!googleLoading) {
                                 googleLoading = true
@@ -3561,7 +3955,7 @@ fun SignupScreen(
                         modifier =
                             Modifier.weight(1f),
                         symbolColor =
-                            Color(0xFF1877F2)
+                            purrFectColor(Color(0xFF1877F2), Color(0xFF1462C7))
                     )
                 }
                 Spacer(
@@ -3584,7 +3978,7 @@ fun SignupScreen(
                         text =
                             "Already have an account? ",
                         color =
-                            Color(0xFF4D4C53),
+                            purrFectColor(Color(0xFF4D4C53), Color(0xFFC5C0D0)),
                         fontSize =
                             15.sp
                     )
@@ -3592,7 +3986,7 @@ fun SignupScreen(
                         text =
                             "Log In",
                         color =
-                            Color(0xFFE85E78),
+                            purrFectColor(Color(0xFFE85E78), Color(0xFFF45A9A)),
                         fontSize =
                             15.sp,
                         fontWeight =
@@ -3653,7 +4047,7 @@ fun LoginScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFFF1ECF8))
+            .background(purrFectColor(Color(0xFFF1ECF8), Color(0xFF211E35)))
             .verticalScroll(
                 rememberScrollState()
             )
@@ -3675,7 +4069,7 @@ fun LoginScreen(
                     RoundedCornerShape(40.dp)
                 )
                 .background(
-                    Color(0xFFFFFAF6)
+                    purrFectColor(Color(0xFFFFFAF6), Color(0xFF151326))
                 )
         ) {
 /* =================================================
@@ -3707,7 +4101,7 @@ TOP PAW
                 contentDescription =
                     "PurrFect",
                 tint =
-                    Color(0xFFB9A3E8),
+                    purrFectColor(Color(0xFFB9A3E8), Color(0xFFB18AE8)),
                 modifier = Modifier
                     .size(60.dp)
                     .align(Alignment.TopEnd)
@@ -3728,7 +4122,7 @@ LAVENDER CAT BACKGROUND
                         RoundedCornerShape(210.dp)
                     )
                     .background(
-                        Color(0xFFD8C9F4)
+                        purrFectColor(Color(0xFFD8C9F4), Color(0xFF302A46))
                     )
                     .graphicsLayer {
                         rotationZ = -17f
@@ -3739,7 +4133,7 @@ DECORATIVE PAWS / HEARTS
 ================================================= */
             Text(
                 text = "♥",
-                color = Color(0xFFF48BA0),
+                color = purrFectColor(Color(0xFFF48BA0), Color(0xFFE07B90)),
                 fontSize = 30.sp,
                 modifier = Modifier
                     .align(Alignment.TopEnd)
@@ -3750,7 +4144,7 @@ DECORATIVE PAWS / HEARTS
             )
             Text(
                 text = "♥",
-                color = Color(0xFFF8A7B5),
+                color = purrFectColor(Color(0xFFF8A7B5), Color(0xFFE07B8D)),
                 fontSize = 22.sp,
                 modifier = Modifier
                     .align(Alignment.TopCenter)
@@ -3764,7 +4158,7 @@ DECORATIVE PAWS / HEARTS
                     Icons.Outlined.Pets,
                 contentDescription = null,
                 tint =
-                    Color(0xFFD8C8F4),
+                    purrFectColor(Color(0xFFD8C8F4), Color(0xFF302A46)),
                 modifier = Modifier
                     .size(58.dp)
                     .align(Alignment.TopStart)
@@ -3778,7 +4172,7 @@ DECORATIVE PAWS / HEARTS
                     Icons.Outlined.Pets,
                 contentDescription = null,
                 tint =
-                    Color(0xFFD5C5F1),
+                    purrFectColor(Color(0xFFD5C5F1), Color(0xFF302A46)),
                 modifier = Modifier
                     .size(50.dp)
                     .align(Alignment.BottomEnd)
@@ -3808,7 +4202,7 @@ MAIN CONTENT
                     text =
                         "Welcome Back!",
                     color =
-                        Color(0xFF202332),
+                        purrFectColor(Color(0xFF202332), Color(0xFFF7F3FA)),
                     fontSize =
                         31.sp,
                     lineHeight =
@@ -3828,7 +4222,7 @@ MAIN CONTENT
                         text =
                             "Login to continue your\npurr-fect journey ",
                         color =
-                            Color(0xFF56545B),
+                            purrFectColor(Color(0xFF56545B), Color(0xFFA8A3B5)),
                         fontSize =
                             17.sp,
                         lineHeight =
@@ -3839,7 +4233,7 @@ MAIN CONTENT
                             Icons.Outlined.Pets,
                         contentDescription = null,
                         tint =
-                            Color(0xFFB7A1E4),
+                            purrFectColor(Color(0xFFB7A1E4), Color(0xFF9D7BE0)),
                         modifier =
                             Modifier
                                 .size(25.dp)
@@ -3894,7 +4288,7 @@ EMAIL
                                 Icons.Outlined.Email,
                             contentDescription = null,
                             tint =
-                                Color(0xFF7560B8)
+                                purrFectColor(Color(0xFF7560B8), Color(0xFF7E68C7))
                         )
                     }
                 )
@@ -3926,7 +4320,7 @@ PASSWORD
                                 Icons.Outlined.Lock,
                             contentDescription = null,
                             tint =
-                                Color(0xFF7560B8)
+                                purrFectColor(Color(0xFF7560B8), Color(0xFF7E68C7))
                         )
                     },
                     trailingIcon = {
@@ -3981,14 +4375,14 @@ REMEMBER ME / FORGOT PASSWORD
                                 )
                                 .background(
                                     if (rememberMe) {
-                                        Color(0xFF9A80D0)
+                                        purrFectColor(Color(0xFF9A80D0), Color(0xFFAA8DE6))
                                     } else {
                                         Color.Transparent
                                     }
                                 )
                                 .border(
                                     width = 1.dp,
-                                    color = Color(0xFF9A80D0),
+                                    color = purrFectColor(Color(0xFF9A80D0), Color(0xFFAA8DE6)),
                                     shape = RoundedCornerShape(5.dp)
                                 ),
                             contentAlignment =
@@ -4011,7 +4405,7 @@ REMEMBER ME / FORGOT PASSWORD
                             text =
                                 "Remember Me",
                             color =
-                                Color(0xFF4E4C53),
+                                purrFectColor(Color(0xFF4E4C53), Color(0xFFC5C0D0)),
                             fontSize =
                                 16.sp
                         )
@@ -4020,7 +4414,7 @@ REMEMBER ME / FORGOT PASSWORD
                         text =
                             "Forgot Password?",
                         color =
-                            Color(0xFF7359B5),
+                            purrFectColor(Color(0xFF7359B5), Color(0xFF7E62C7)),
                         fontSize =
                             15.sp,
                         modifier =
@@ -4080,7 +4474,7 @@ LOGIN BUTTON
                     colors =
                         ButtonDefaults.buttonColors(
                             containerColor =
-                                Color(0xFFF06B84)
+                                purrFectColor(Color(0xFFF06B84), Color(0xFFE0647B))
                         )
                 ) {
                     Text(
@@ -4125,14 +4519,14 @@ CONTINUE WITH
                             .weight(1f)
                             .height(1.dp)
                             .background(
-                                Color(0xFFE4DCD8)
+                                purrFectColor(Color(0xFFE4DCD8), Color(0xFF302A46))
                             )
                     )
                     Text(
                         text =
                             " or continue with ",
                         color =
-                            Color(0xFF5C5960),
+                            purrFectColor(Color(0xFF5C5960), Color(0xFFA8A3B5)),
                         fontSize =
                             14.sp
                     )
@@ -4141,7 +4535,7 @@ CONTINUE WITH
                             .weight(1f)
                             .height(1.dp)
                             .background(
-                                Color(0xFFE4DCD8)
+                                purrFectColor(Color(0xFFE4DCD8), Color(0xFF302A46))
                             )
                     )
                 }
@@ -4159,7 +4553,7 @@ CONTINUE WITH
                         label = if (googleLoading) "Signing in..." else "Google",
                         symbol = "G",
                         modifier = Modifier.weight(1f),
-                        symbolColor = Color(0xFF4285F4),
+                        symbolColor = purrFectColor(Color(0xFF4285F4), Color(0xFF3D7AE0)),
                         onClick = {
                             if (!googleLoading) {
                                 googleLoading = true
@@ -4195,7 +4589,7 @@ CONTINUE WITH
                         label = "Facebook",
                         symbol = "f",
                         modifier = Modifier.weight(1f),
-                        symbolColor = Color(0xFF1877F2)
+                        symbolColor = purrFectColor(Color(0xFF1877F2), Color(0xFF1462C7))
                     )
                 }
                 Spacer(
@@ -4218,7 +4612,7 @@ CONTINUE WITH
                         text =
                             "Don’t have an account? ",
                         color =
-                            Color(0xFF4D4C53),
+                            purrFectColor(Color(0xFF4D4C53), Color(0xFFC5C0D0)),
                         fontSize =
                             15.sp
                     )
@@ -4226,7 +4620,7 @@ CONTINUE WITH
                         text =
                             "Sign Up →",
                         color =
-                            Color(0xFFE85E78),
+                            purrFectColor(Color(0xFFE85E78), Color(0xFFF45A9A)),
                         fontSize =
                             15.sp,
                         fontWeight =
@@ -4260,7 +4654,7 @@ fun SignupField(
         placeholder = {
             Text(
                 text = placeholder,
-                color = Color(0xFF858189),
+                color = purrFectColor(Color(0xFF858189), Color(0xFFA8A3B5)),
                 fontSize = 15.sp
             )
         },
@@ -4278,13 +4672,13 @@ fun SignupField(
         colors =
             OutlinedTextFieldDefaults.colors(
                 focusedBorderColor =
-                    Color(0xFFE2D9D5),
+                    purrFectColor(Color(0xFFE2D9D5), Color(0xFF302A46)),
                 unfocusedBorderColor =
-                    Color(0xFFE2D9D5),
+                    purrFectColor(Color(0xFFE2D9D5), Color(0xFF302A46)),
                 focusedContainerColor =
-                    Color(0xFFFFFCFA),
+                    purrFectColor(Color(0xFFFFFCFA), Color(0xFF151326)),
                 unfocusedContainerColor =
-                    Color(0xFFFFFCFA),
+                    purrFectColor(Color(0xFFFFFCFA), Color(0xFF151326)),
                 focusedTextColor =
                     TextDark,
                 unfocusedTextColor =
@@ -4334,13 +4728,13 @@ fun SocialButton(
         colors =
             OutlinedTextFieldDefaults.colors(
                 focusedBorderColor =
-                    Color(0xFFE2D9D5),
+                    purrFectColor(Color(0xFFE2D9D5), Color(0xFF302A46)),
                 unfocusedBorderColor =
-                    Color(0xFFE2D9D5),
+                    purrFectColor(Color(0xFFE2D9D5), Color(0xFF302A46)),
                 focusedContainerColor =
-                    Color(0xFFFFFCFA),
+                    purrFectColor(Color(0xFFFFFCFA), Color(0xFF151326)),
                 unfocusedContainerColor =
-                    Color(0xFFFFFCFA)
+                    purrFectColor(Color(0xFFFFFCFA), Color(0xFF151326))
             )
     )
 }
@@ -4361,7 +4755,7 @@ fun WelcomeCircle(
             )
             .clip(CircleShape)
             .background(
-                Color(0xFFFFDEC8)
+                purrFectColor(Color(0xFFFFDEC8), Color(0xFF211E35))
             )
     )
 }
@@ -4374,7 +4768,7 @@ fun WelcomeStar(
     x: Dp,
     y: Dp,
     size: Int,
-    color: Color = Color(0xFFFFEFA8)
+    color: Color = purrFectColor(Color(0xFFFFEFA8), Color(0xFF211E35))
 ) {
     Icon(
         imageVector =
@@ -5483,7 +5877,7 @@ fun SwipeCard(
                 modifier = Modifier
                     .fillMaxSize()
                     .clip(RoundedCornerShape(20.dp))
-                    .background(Color(0xFFE4D4C8)),
+                    .background(purrFectColor(Color(0xFFE4D4C8), Color(0xFF302A46))),
                 contentAlignment = Alignment.Center
             ) {
                 if (cat.photoBitmap != null) {
@@ -6007,7 +6401,7 @@ fun LikedYouCard(
                     RoundedCornerShape(15.dp)
                 )
                 .background(
-                    Color(0xFFEDE4E0)
+                    purrFectColor(Color(0xFFEDE4E0), Color(0xFF211E35))
                 )
         ) {
             Image(
@@ -6031,7 +6425,7 @@ fun LikedYouCard(
                         )
                         .clip(CircleShape)
                         .background(
-                            Color(0xFF63B87A)
+                            purrFectColor(Color(0xFF63B87A), Color(0xFF79E095))
                         )
                         .border(
                             2.dp,
@@ -6074,7 +6468,7 @@ fun LikedYouCard(
                         if (user.gender == "Female") {
                             Pink
                         } else {
-                            Color(0xFF638BC7)
+                            purrFectColor(Color(0xFF638BC7), Color(0xFF709DE0))
                         },
                     fontSize = 18.sp
                 )
@@ -6206,7 +6600,7 @@ CAT PHOTO
                     RoundedCornerShape(15.dp)
                 )
                 .background(
-                    Color(0xFFEDE4E0)
+                    purrFectColor(Color(0xFFEDE4E0), Color(0xFF211E35))
                 )
         ) {
             Image(
@@ -6230,7 +6624,7 @@ CAT PHOTO
                         )
                         .clip(CircleShape)
                         .background(
-                            Color(0xFF63B87A)
+                            purrFectColor(Color(0xFF63B87A), Color(0xFF79E095))
                         )
                         .border(
                             2.dp,
@@ -6277,7 +6671,7 @@ INFORMATION
                         if (match.gender == "Female") {
                             Pink
                         } else {
-                            Color(0xFF638BC7)
+                            purrFectColor(Color(0xFF638BC7), Color(0xFF709DE0))
                         },
                     fontSize = 18.sp
                 )
@@ -6605,7 +6999,7 @@ fun CatProfileScreen(
                             if (match.gender == "Male") "\u2642" else "\u2640",
                         color =
                             if (match.gender == "Male") {
-                                Color(0xFF7189D9)
+                                purrFectColor(Color(0xFF7189D9), Color(0xFF758EE0))
                             } else {
                                 Pink
                             },
@@ -6852,7 +7246,7 @@ fun CatProfileScreen(
                     likeError?.let { errorMessage ->
                         Text(
                             text = errorMessage,
-                            color = Color(0xFFD32F2F),
+                            color = purrFectColor(Color(0xFFD32F2F), Color(0xFFC72C2C)),
                             fontSize = 12.sp,
                             modifier = Modifier.padding(top = 6.dp)
                         )
@@ -6923,7 +7317,7 @@ fun FavoriteActivity(
                 .size(48.dp)
                 .clip(CircleShape)
                 .background(
-                    Color(0xFFFFF1E7)
+                    purrFectColor(Color(0xFFFFF1E7), Color(0xFF211E35))
                 ),
             contentAlignment =
                 Alignment.Center
@@ -7115,7 +7509,7 @@ fun CompatibilityScreen(
                                 CompatibilityHeartShape()
                             )
                             .background(
-                                Color(0xFFFFE8ED)
+                                purrFectColor(Color(0xFFFFE8ED), Color(0xFF211E35))
                             )
                             .border(
                                 width = 9.dp,
@@ -7371,7 +7765,7 @@ fun CompatibilityMetric(
                 .height(8.dp)
                 .clip(CircleShape)
                 .background(
-                    Color(0xFFF2E8EA)
+                    purrFectColor(Color(0xFFF2E8EA), Color(0xFF211E35))
                 )
         ) {
             Box(
@@ -7438,17 +7832,19 @@ fun ChatsScreen(
     Box(
         modifier = Modifier.fillMaxSize()
     ) {
-        Image(
-            painter = painterResource(id = R.drawable.chatbg),
-            contentDescription = null,
-            modifier = Modifier.matchParentSize(),
-            contentScale = ContentScale.FillBounds
-        )
+        if (!purrFectDarkMode) {
+            Image(
+                painter = painterResource(id = R.drawable.chatbg),
+                contentDescription = null,
+                modifier = Modifier.matchParentSize(),
+                contentScale = ContentScale.FillBounds
+            )
+        }
 
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.Transparent)
+                .background(BackgroundColor)
         ) {
             Row(
                 modifier = Modifier
@@ -7622,6 +8018,8 @@ fun ChatRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .clip(RoundedCornerShape(18.dp))
+            .background(if (purrFectDarkMode) CardColor else Color.Transparent)
             .clickable(
                 onClick = onClick
             )
@@ -7637,7 +8035,7 @@ fun ChatRow(
                 .size(58.dp)
                 .clip(CircleShape)
                 .background(
-                    Color(0xFFEDE4E0)
+                    purrFectColor(Color(0xFFEDE4E0), Color(0xFF211E35))
                 ),
             contentAlignment =
                 Alignment.Center
@@ -7661,7 +8059,7 @@ fun ChatRow(
                         )
                         .clip(CircleShape)
                         .background(
-                            Color(0xFF63B87A)
+                            purrFectColor(Color(0xFF63B87A), Color(0xFF79E095))
                         )
                         .border(
                             2.dp,
@@ -7858,7 +8256,7 @@ fun IndividualChatScreen(
                 modifier = Modifier
                     .size(44.dp)
                     .clip(CircleShape)
-                    .background(Color(0xFFEDE4E0)),
+                    .background(purrFectColor(Color(0xFFEDE4E0), Color(0xFF211E35))),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(Icons.Outlined.Pets, "Cat", tint = TextGrey, modifier = Modifier.size(22.dp))
@@ -7869,7 +8267,7 @@ fun IndividualChatScreen(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(
                         Modifier.size(7.dp).clip(CircleShape).background(
-                            if (chat.online) Color(0xFF36B56A) else TextGrey
+                            if (chat.online) purrFectColor(Color(0xFF36B56A), Color(0xFF43E083)) else TextGrey
                         )
                     )
                     Spacer(Modifier.width(5.dp))
@@ -8009,7 +8407,7 @@ fun IndividualChatScreen(
                         Text("Report user", color = TextDark)
                     }
                     TextButton(onClick = { showChatOptions = false; showBlockDialog = true }) {
-                        Text("⊘", color = Color(0xFFD94B5B), fontSize = 20.sp)
+                        Text("⊘", color = purrFectColor(Color(0xFFD94B5B), Color(0xFFC74553)), fontSize = 20.sp)
                         Spacer(Modifier.width(10.dp))
                         Text("Block user", color = TextDark)
                     }
@@ -8096,7 +8494,7 @@ fun IndividualChatScreen(
                             showBlockDialog = false
                         }
                     }
-                }) { Text("Block", color = Color(0xFFD94B5B)) }
+                }) { Text("Block", color = purrFectColor(Color(0xFFD94B5B), Color(0xFFC74553))) }
             },
             dismissButton = { TextButton(onClick = { showBlockDialog = false }) { Text("Cancel") } }
         )
@@ -8269,6 +8667,7 @@ MY CAT SCREEN
 fun MyCatScreen(
     profile: CatProfile,
     onEditProfile: () -> Unit,
+    onSettingsClick: () -> Unit,
     onTabSelected: (Int) -> Unit
 ) {
     Column(
@@ -8301,6 +8700,19 @@ fun MyCatScreen(
                     fontWeight =
                         FontWeight.Bold
                 )
+                IconButton(
+                    onClick = onSettingsClick,
+                    modifier = Modifier
+                        .align(Alignment.CenterEnd)
+                        .padding(end = 10.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.Settings,
+                        contentDescription = "Settings",
+                        tint = TextDark,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
             }
         }
         Column(
@@ -8381,7 +8793,7 @@ fun MyCatScreen(
                                 ) {
                                     Pink
                                 } else {
-                                    Color(0xFF638BC7)
+                                    purrFectColor(Color(0xFF638BC7), Color(0xFF709DE0))
                                 },
                             fontSize =
                                 18.sp
@@ -8489,6 +8901,1636 @@ fun MyCatScreen(
             onTabSelected = {
                 onTabSelected(it)
             }
+        )
+    }
+}
+/* =========================================================
+MY CAT PROFILES SCREEN
+========================================================= */
+@Composable
+fun MyCatProfilesScreen(
+    cats: List<CatProfile>,
+    activeCatId: Int,
+    onBack: () -> Unit,
+    onAddCat: () -> Unit,
+    onSelectCat: (CatProfile) -> Unit,
+    onEditCat: (CatProfile) -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(purrFectColor(Color(0xFFFFF9F6), Color(0xFF151326)))
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(onClick = onBack) {
+                Icon(Icons.Outlined.ArrowBack, "Back", tint = purrFectColor(Color(0xFF20243A), Color(0xFFF7F3FA)))
+            }
+            Text(
+                "My Cat Profiles",
+                color = purrFectColor(Color(0xFF20243A), Color(0xFFF7F3FA)),
+                fontSize = 24.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.weight(1f)
+            )
+        }
+
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(horizontal = 18.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            item {
+                Text(
+                    "Manage your cats",
+                    color = purrFectColor(Color(0xFF7C8294), Color(0xFFA8A3B5)),
+                    fontSize = 15.sp,
+                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                )
+            }
+
+            if (cats.isEmpty()) {
+                item {
+                    SettingsCard {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(24.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Icon(Icons.Outlined.Pets, null, tint = purrFectColor(Color(0xFF8057C7), Color(0xFF9A63DC)), modifier = Modifier.size(48.dp))
+                            Spacer(Modifier.height(10.dp))
+                            Text("No cat profiles yet", fontWeight = FontWeight.Bold, color = TextDark, fontSize = 18.sp)
+                            Text("Add your first cat profile to get started.", color = TextGrey, fontSize = 14.sp)
+                        }
+                    }
+                }
+            } else {
+                items(cats, key = { it.id }) { cat ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(22.dp))
+                            .background(purrFectColor(Color(0xFFFFFDFB), Color(0xFF151326)))
+                            .border(1.dp, if (cat.id == activeCatId) purrFectColor(Color(0xFFFFA8B8), Color(0xFFFF8FC0)) else purrFectColor(Color(0xFFF0E5E1), Color(0xFF211E35)), RoundedCornerShape(22.dp))
+                            .clickable { onSelectCat(cat) }
+                            .padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(Modifier.size(72.dp).clip(CircleShape).background(purrFectColor(Color(0xFFFFE4E9), Color(0xFF211E35)))) {
+                            if (cat.photoBitmap != null) {
+                                Image(cat.photoBitmap.asImageBitmap(), cat.name, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                            } else {
+                                Icon(Icons.Outlined.Pets, null, tint = purrFectColor(Color(0xFFE95270), Color(0xFFF45A9A)), modifier = Modifier.align(Alignment.Center).size(34.dp))
+                            }
+                        }
+                        Spacer(Modifier.width(14.dp))
+                        Column(Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(cat.name.ifBlank { "Unnamed Cat" }, color = TextDark, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                                if (cat.id == activeCatId) {
+                                    Spacer(Modifier.width(8.dp))
+                                    Text("ACTIVE", color = Pink, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                            Spacer(Modifier.height(3.dp))
+                            Text("${cat.breed} • ${cat.age} years", color = TextGrey, fontSize = 13.sp)
+                        }
+                        IconButton(onClick = { onEditCat(cat) }) {
+                            Icon(Icons.Filled.Edit, "Edit cat", tint = purrFectColor(Color(0xFFE95270), Color(0xFFF45A9A)))
+                        }
+                    }
+                }
+            }
+
+            item {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(22.dp))
+                        .background(purrFectColor(Color(0xFFFFE7EC), Color(0xFF211E35)))
+                        .clickable(onClick = onAddCat)
+                        .padding(horizontal = 18.dp, vertical = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(Icons.Filled.Add, "Add cat", tint = Pink, modifier = Modifier.size(28.dp))
+                    Spacer(Modifier.width(14.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("Add New Cat", color = Pink, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+                        Text("Create another cat profile", color = TextGrey, fontSize = 13.sp)
+                    }
+                    Icon(Icons.Outlined.ChevronRight, null, tint = purrFectColor(Color(0xFF73798A), Color(0xFFA8A3B5)))
+                }
+            }
+        }
+    }
+}
+
+/* =========================================================
+ACCOUNT & SECURITY SCREEN
+========================================================= */
+@Composable
+fun AccountSecurityScreen(
+    user: BackendUser?,
+    onBack: () -> Unit,
+    onLogout: () -> Unit
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var passwordStep by remember { mutableIntStateOf(0) }
+    var email by remember { mutableStateOf(user?.email ?: "") }
+    var otp by remember { mutableStateOf("") }
+    var newPassword by remember { mutableStateOf("") }
+    var confirmPassword by remember { mutableStateOf("") }
+    var resetToken by remember { mutableStateOf("") }
+    var loading by remember { mutableStateOf(false) }
+    var showDeleteDialog by remember { mutableStateOf(false) }
+    var showSecurityInfo by remember { mutableStateOf(false) }
+
+    fun showError(message: String) {
+        Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(purrFectColor(Color(0xFFFFF9F6), Color(0xFF151326)))
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(62.dp)
+                .padding(horizontal = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(onClick = onBack) {
+                Icon(
+                    imageVector = Icons.Outlined.ArrowBack,
+                    contentDescription = "Back",
+                    tint = purrFectColor(Color(0xFF20243A), Color(0xFFF7F3FA)),
+                    modifier = Modifier.size(25.dp)
+                )
+            }
+            Text(
+                text = "Account & Security",
+                color = purrFectColor(Color(0xFF20243A), Color(0xFFF7F3FA)),
+                fontSize = 22.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.weight(1f)
+            )
+        }
+
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 18.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            AccountSecurityInfoCard(
+                title = "Email",
+                value = user?.email?.ifBlank { "Not available" } ?: "Not available",
+                icon = Icons.Outlined.Email,
+                iconColor = purrFectColor(Color(0xFFE95270), Color(0xFFF45A9A)),
+                iconBackground = purrFectColor(Color(0xFFFFE4E9), Color(0xFF211E35))
+            )
+
+            SettingsCard {
+                SettingsNavigationRow(
+                    icon = Icons.Outlined.Lock,
+                    iconColor = purrFectColor(Color(0xFFE95270), Color(0xFFF45A9A)),
+                    iconBackground = purrFectColor(Color(0xFFFFE4E9), Color(0xFF211E35)),
+                    title = "Change Password",
+                    subtitle = "Reset your password using email verification",
+                    onClick = {
+                        email = user?.email ?: ""
+                        passwordStep = 0
+                        otp = ""
+                        newPassword = ""
+                        confirmPassword = ""
+                        resetToken = ""
+                    }
+                )
+                SettingsDivider()
+                SettingsNavigationRow(
+                    icon = Icons.Outlined.Shield,
+                    iconColor = purrFectColor(Color(0xFF7952C8), Color(0xFF8A5BD1)),
+                    iconBackground = purrFectColor(Color(0xFFF0E5FF), Color(0xFF211E35)),
+                    title = "Security",
+                    subtitle = "Review your account security",
+                    onClick = { showSecurityInfo = true }
+                )
+            }
+
+            Text(
+                text = "Password Reset",
+                color = purrFectColor(Color(0xFF72798B), Color(0xFFA8A3B5)),
+                fontSize = 17.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(start = 8.dp, bottom = 0.dp)
+            )
+
+            SettingsCard {
+                Column(
+                    modifier = Modifier.padding(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(
+                        text = when (passwordStep) {
+                            0 -> "Send verification code"
+                            1 -> "Verify your OTP"
+                            else -> "Create a new password"
+                        },
+                        color = purrFectColor(Color(0xFF20243A), Color(0xFFF7F3FA)),
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = when (passwordStep) {
+                            0 -> "We'll send a 6-digit code to your registered email."
+                            1 -> "Enter the 6-digit code sent to $email."
+                            else -> "Choose a new password with at least 8 characters."
+                        },
+                        color = purrFectColor(Color(0xFF7C8294), Color(0xFFA8A3B5)),
+                        fontSize = 14.sp,
+                        lineHeight = 20.sp
+                    )
+
+                    if (passwordStep == 0) {
+                        OutlinedTextField(
+                            value = email,
+                            onValueChange = { email = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            label = { Text("Email") },
+                            leadingIcon = {
+                                Icon(Icons.Outlined.Email, contentDescription = null, tint = Pink)
+                            },
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = Pink,
+                                unfocusedBorderColor = purrFectColor(Color(0xFFE2D9D5), Color(0xFF302A46)),
+                                focusedContainerColor = purrFectColor(Color(0xFFFFFCFA), Color(0xFF151326)),
+                                unfocusedContainerColor = purrFectColor(Color(0xFFFFFCFA), Color(0xFF151326))
+                            ),
+                            shape = RoundedCornerShape(17.dp)
+                        )
+                        Button(
+                            onClick = {
+                                if (!android.util.Patterns.EMAIL_ADDRESS.matcher(email.trim()).matches()) {
+                                    showError("Enter a valid email address")
+                                    return@Button
+                                }
+                                loading = true
+                                scope.launch {
+                                    try {
+                                        PurrFectApi.forgotPassword(email)
+                                        passwordStep = 1
+                                        Toast.makeText(context, "Verification code sent", Toast.LENGTH_SHORT).show()
+                                    } catch (error: Exception) {
+                                        showError(error.message ?: "Could not send verification code")
+                                    } finally {
+                                        loading = false
+                                    }
+                                }
+                            },
+                            enabled = !loading,
+                            modifier = Modifier.fillMaxWidth().height(54.dp),
+                            shape = RoundedCornerShape(17.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = Pink)
+                        ) {
+                            Text(if (loading) "Sending..." else "Send OTP", color = Color.White, fontWeight = FontWeight.Bold)
+                        }
+                    } else if (passwordStep == 1) {
+                        OutlinedTextField(
+                            value = otp,
+                            onValueChange = { value -> otp = value.filter(Char::isDigit).take(6) },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            label = { Text("6-digit OTP") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            leadingIcon = {
+                                Icon(Icons.Outlined.LocationOn, contentDescription = null, tint = Pink)
+                            },
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = Pink,
+                                unfocusedBorderColor = purrFectColor(Color(0xFFE2D9D5), Color(0xFF302A46)),
+                                focusedContainerColor = purrFectColor(Color(0xFFFFFCFA), Color(0xFF151326)),
+                                unfocusedContainerColor = purrFectColor(Color(0xFFFFFCFA), Color(0xFF151326))
+                            ),
+                            shape = RoundedCornerShape(17.dp)
+                        )
+                        Button(
+                            onClick = {
+                                if (otp.length != 6) {
+                                    showError("Enter the 6-digit OTP")
+                                    return@Button
+                                }
+                                loading = true
+                                scope.launch {
+                                    try {
+                                        val response = PurrFectApi.verifyResetOtp(email, otp)
+                                        resetToken = response.optString("reset_token")
+                                        if (resetToken.isBlank()) throw IllegalStateException("Reset session could not be created")
+                                        passwordStep = 2
+                                        Toast.makeText(context, "OTP verified", Toast.LENGTH_SHORT).show()
+                                    } catch (error: Exception) {
+                                        showError(error.message ?: "Invalid or expired OTP")
+                                    } finally {
+                                        loading = false
+                                    }
+                                }
+                            },
+                            enabled = !loading,
+                            modifier = Modifier.fillMaxWidth().height(54.dp),
+                            shape = RoundedCornerShape(17.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = Pink)
+                        ) {
+                            Text(if (loading) "Verifying..." else "Verify OTP", color = Color.White, fontWeight = FontWeight.Bold)
+                        }
+                        TextButton(
+                            onClick = { passwordStep = 0; otp = "" },
+                            enabled = !loading,
+                            modifier = Modifier.align(Alignment.CenterHorizontally)
+                        ) {
+                            Text("Use another email", color = Pink)
+                        }
+                    } else {
+                        OutlinedTextField(
+                            value = newPassword,
+                            onValueChange = { newPassword = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            label = { Text("New password") },
+                            visualTransformation = PasswordVisualTransformation(),
+                            leadingIcon = {
+                                Icon(Icons.Outlined.Lock, contentDescription = null, tint = Pink)
+                            },
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = Pink,
+                                unfocusedBorderColor = purrFectColor(Color(0xFFE2D9D5), Color(0xFF302A46)),
+                                focusedContainerColor = purrFectColor(Color(0xFFFFFCFA), Color(0xFF151326)),
+                                unfocusedContainerColor = purrFectColor(Color(0xFFFFFCFA), Color(0xFF151326))
+                            ),
+                            shape = RoundedCornerShape(17.dp)
+                        )
+                        OutlinedTextField(
+                            value = confirmPassword,
+                            onValueChange = { confirmPassword = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            label = { Text("Confirm new password") },
+                            visualTransformation = PasswordVisualTransformation(),
+                            leadingIcon = {
+                                Icon(Icons.Outlined.Lock, contentDescription = null, tint = Pink)
+                            },
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = Pink,
+                                unfocusedBorderColor = purrFectColor(Color(0xFFE2D9D5), Color(0xFF302A46)),
+                                focusedContainerColor = purrFectColor(Color(0xFFFFFCFA), Color(0xFF151326)),
+                                unfocusedContainerColor = purrFectColor(Color(0xFFFFFCFA), Color(0xFF151326))
+                            ),
+                            shape = RoundedCornerShape(17.dp)
+                        )
+                        Button(
+                            onClick = {
+                                when {
+                                    newPassword.length < 8 -> showError("Password must be at least 8 characters")
+                                    newPassword != confirmPassword -> showError("Passwords do not match")
+                                    resetToken.isBlank() -> showError("Password reset session expired")
+                                    else -> {
+                                        loading = true
+                                        scope.launch {
+                                            try {
+                                                PurrFectApi.resetPassword(email, resetToken, newPassword)
+                                                Toast.makeText(context, "Password changed successfully", Toast.LENGTH_SHORT).show()
+                                                passwordStep = 0
+                                                otp = ""
+                                                newPassword = ""
+                                                confirmPassword = ""
+                                                resetToken = ""
+                                            } catch (error: Exception) {
+                                                showError(error.message ?: "Could not change password")
+                                            } finally {
+                                                loading = false
+                                            }
+                                        }
+                                    }
+                                }
+                            },
+                            enabled = !loading,
+                            modifier = Modifier.fillMaxWidth().height(54.dp),
+                            shape = RoundedCornerShape(17.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = Pink)
+                        ) {
+                            Text(if (loading) "Saving..." else "Change Password", color = Color.White, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(22.dp))
+                    .background(purrFectColor(Color(0xFFFFF0F2), Color(0xFF211E35)))
+                    .clickable { showDeleteDialog = true }
+                    .padding(horizontal = 16.dp, vertical = 15.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.Delete,
+                    contentDescription = "Delete account",
+                    tint = purrFectColor(Color(0xFFE24B62), Color(0xFFC74256)),
+                    modifier = Modifier.size(27.dp)
+                )
+                Spacer(modifier = Modifier.width(14.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Delete Account", color = purrFectColor(Color(0xFFE24B62), Color(0xFFC74256)), fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                    Text("Permanently remove your account", color = purrFectColor(Color(0xFF8B7075), Color(0xFFA8A3B5)), fontSize = 12.sp)
+                }
+                Icon(Icons.Outlined.ChevronRight, contentDescription = null, tint = purrFectColor(Color(0xFF73798A), Color(0xFFA8A3B5)))
+            }
+
+            Button(
+                onClick = onLogout,
+                modifier = Modifier.fillMaxWidth().height(54.dp),
+                shape = RoundedCornerShape(18.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = purrFectColor(Color(0xFFFFE4E9), Color(0xFF211E35)))
+            ) {
+                Icon(Icons.Outlined.Logout, contentDescription = null, tint = purrFectColor(Color(0xFFE95270), Color(0xFFF45A9A)))
+                Spacer(modifier = Modifier.width(10.dp))
+                Text("Logout", color = purrFectColor(Color(0xFFE95270), Color(0xFFF45A9A)), fontWeight = FontWeight.Bold)
+            }
+            Spacer(modifier = Modifier.height(18.dp))
+        }
+    }
+
+    if (showSecurityInfo) {
+        AlertDialog(
+            onDismissRequest = { showSecurityInfo = false },
+            title = { Text("Security", fontWeight = FontWeight.Bold) },
+            text = {
+                Text("Your PurrFect password is stored securely on the backend. Password changes require email verification and a one-time OTP.")
+            },
+            confirmButton = {
+                TextButton(onClick = { showSecurityInfo = false }) { Text("OK", color = Pink) }
+            }
+        )
+    }
+
+    if (showDeleteDialog) {
+        AlertDialog(
+            onDismissRequest = { showDeleteDialog = false },
+            title = { Text("Delete Account?", fontWeight = FontWeight.Bold) },
+            text = { Text("Account deletion is not enabled yet. Your account will not be changed.") },
+            confirmButton = {
+                TextButton(onClick = { showDeleteDialog = false }) {
+                    Text("OK", color = Pink, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteDialog = false }) { Text("Cancel", color = TextGrey) }
+            }
+        )
+    }
+}
+
+@Composable
+private fun AccountSecurityInfoCard(
+    title: String,
+    value: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    iconColor: Color,
+    iconBackground: Color
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(25.dp))
+            .background(purrFectColor(Color(0xFFFFFDFB), Color(0xFF151326)))
+            .border(1.dp, purrFectColor(Color(0xFFF2E5E2), Color(0xFF211E35)), RoundedCornerShape(25.dp))
+            .padding(horizontal = 14.dp, vertical = 15.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(52.dp)
+                .clip(RoundedCornerShape(17.dp))
+                .background(iconBackground),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(icon, contentDescription = null, tint = iconColor, modifier = Modifier.size(26.dp))
+        }
+        Spacer(modifier = Modifier.width(15.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, color = purrFectColor(Color(0xFF20243A), Color(0xFFF7F3FA)), fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            Spacer(modifier = Modifier.height(3.dp))
+            Text(value, color = purrFectColor(Color(0xFF7C8294), Color(0xFFA8A3B5)), fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+    }
+}
+
+/* =========================================================
+PRIVACY SCREEN
+========================================================= */
+@Composable
+fun PrivacyScreen(
+    onlineStatusEnabled: Boolean,
+    onOnlineStatusChange: (Boolean) -> Unit,
+    onAccountSecurity: () -> Unit,
+    onBack: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(purrFectColor(Color(0xFFFFF9F6), Color(0xFF151326)))
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(62.dp)
+                .padding(horizontal = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(onClick = onBack) {
+                Icon(
+                    imageVector = Icons.Outlined.ArrowBack,
+                    contentDescription = "Back",
+                    tint = purrFectColor(Color(0xFF20243A), Color(0xFFF7F3FA)),
+                    modifier = Modifier.size(25.dp)
+                )
+            }
+            Text(
+                text = "Privacy",
+                color = purrFectColor(Color(0xFF20243A), Color(0xFFF7F3FA)),
+                fontSize = 25.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.weight(1f)
+            )
+            Icon(
+                imageVector = Icons.Outlined.Shield,
+                contentDescription = null,
+                tint = purrFectColor(Color(0xFF7952C8), Color(0xFF8A5BD1)),
+                modifier = Modifier.padding(end = 12.dp).size(25.dp)
+            )
+        }
+
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 18.dp)
+                .padding(bottom = 28.dp)
+        ) {
+            Text(
+                text = "Control what PurrFect shares and how your presence appears to other users.",
+                color = purrFectColor(Color(0xFF6F6870), Color(0xFFB8B3C5)),
+                fontSize = 14.sp,
+                lineHeight = 20.sp,
+                modifier = Modifier.padding(horizontal = 6.dp, vertical = 6.dp)
+            )
+
+            Spacer(modifier = Modifier.height(14.dp))
+            SettingsSectionTitle("Visibility")
+            SettingsCard {
+                SettingsSwitchRow(
+                    icon = Icons.Outlined.Visibility,
+                    iconColor = purrFectColor(Color(0xFFE95270), Color(0xFFF45A9A)),
+                    iconBackground = purrFectColor(Color(0xFFFFE4E9), Color(0xFF211E35)),
+                    title = "Online Status",
+                    subtitle = if (onlineStatusEnabled) "Others can see when you are online" else "Your online status is hidden",
+                    checked = onlineStatusEnabled,
+                    onCheckedChange = onOnlineStatusChange
+                )
+            }
+
+            Spacer(modifier = Modifier.height(18.dp))
+            SettingsSectionTitle("Location & Discovery")
+            SettingsCard {
+                SettingsNavigationRow(
+                    icon = Icons.Outlined.LocationOn,
+                    iconColor = purrFectColor(Color(0xFFE95270), Color(0xFFF45A9A)),
+                    iconBackground = purrFectColor(Color(0xFFFFE4E9), Color(0xFF211E35)),
+                    title = "Location Access",
+                    subtitle = "PurrFect currently does not request device location permission",
+                    onClick = { }
+                )
+                SettingsDivider()
+                SettingsNavigationRow(
+                    icon = Icons.Outlined.Visibility,
+                    iconColor = purrFectColor(Color(0xFF7952C8), Color(0xFF8A5BD1)),
+                    iconBackground = purrFectColor(Color(0xFFF0E5FF), Color(0xFF211E35)),
+                    title = "Profile Visibility",
+                    subtitle = "Discover profiles are controlled by the existing cat-profile system",
+                    onClick = { }
+                )
+            }
+
+            Spacer(modifier = Modifier.height(18.dp))
+            SettingsSectionTitle("Account & Data")
+            SettingsCard {
+                SettingsNavigationRow(
+                    icon = Icons.Outlined.Lock,
+                    iconColor = purrFectColor(Color(0xFFE88B4A), Color(0xFFE08648)),
+                    iconBackground = purrFectColor(Color(0xFFFFEBDC), Color(0xFF211E35)),
+                    title = "Account & Security",
+                    subtitle = "Review your account information and security",
+                    onClick = onAccountSecurity
+                )
+            }
+
+        }
+    }
+}
+
+@Composable
+fun HelpSupportScreen(onBack: () -> Unit) {
+    val context = LocalContext.current
+    val background = purrFectColor(Color(0xFFFFF9F6), Color(0xFF151326))
+    val cardBackground = purrFectColor(Color(0xFFFFFDFB), Color(0xFF1D1A30))
+    val primaryText = purrFectColor(Color(0xFF20243A), Color(0xFFF7F3FA))
+    val secondaryText = purrFectColor(Color(0xFF7C8294), Color(0xFFA8A3B5))
+    val border = purrFectColor(Color(0xFFFFD8DF), Color(0xFF2A2640))
+    val accent = purrFectColor(Color(0xFFE95270), Color(0xFFF45A9A))
+    val accentSoft = purrFectColor(Color(0xFFFFE4E9), Color(0xFF211E35))
+
+    var expandedFaq by remember { mutableStateOf<String?>(null) }
+
+    val faqs = listOf(
+        "How do I create or edit a cat profile?" to
+                "Open My Cat from the bottom navigation or Settings → My Cat Profiles. You can add a cat, select an existing profile, and edit its information and photos.",
+        "How do matches work?" to
+                "Use Discover to explore cat profiles and like cats you are interested in. When the relevant like relationship is created, PurrFect can show the connection in Matches.",
+        "Why am I not receiving notifications?" to
+                "Open Settings → Notifications and make sure notifications are enabled. You can also review the individual notification categories from the notification settings screen.",
+        "How can I control my online status?" to
+                "Open Settings → Privacy. The Online Status control manages whether your cat's presence is sent as online or offline through the existing presence feature.",
+        "How do I change between light and dark mode?" to
+                "Open Settings and use the Dark Mode switch. Your preference is saved locally and applied when the app is used again.",
+        "How do I change the distance unit?" to
+                "Open Settings → Distance Unit and choose Kilometres (km) or Miles (mi). The selected preference is saved locally."
+    )
+
+    fun openEmailComposer() {
+        val intent = Intent(
+            Intent.ACTION_SENDTO,
+            Uri.parse("mailto:")
+        ).apply {
+            putExtra(Intent.EXTRA_SUBJECT, "PurrFect Support Request")
+            putExtra(
+                Intent.EXTRA_TEXT,
+                "Hello PurrFect Team,\n\nI need help with:\n\nDevice/Android version:\n\nWhat happened:\n\nSteps to reproduce:\n\nThank you."
+            )
+        }
+        try {
+            context.startActivity(intent)
+        } catch (_: Exception) {
+            Toast.makeText(
+                context,
+                "No email app is available on this device",
+                Toast.LENGTH_SHORT
+            ).show()
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(background)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(62.dp)
+                .padding(horizontal = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(onClick = onBack) {
+                Icon(
+                    imageVector = Icons.Outlined.ArrowBack,
+                    contentDescription = "Back",
+                    tint = primaryText,
+                    modifier = Modifier.size(25.dp)
+                )
+            }
+            Text(
+                text = "Help & Support",
+                color = primaryText,
+                fontSize = 23.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.weight(1f)
+            )
+            Icon(
+                imageVector = Icons.Outlined.HelpOutline,
+                contentDescription = null,
+                tint = accent,
+                modifier = Modifier.size(27.dp)
+            )
+        }
+
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 18.dp)
+                .padding(bottom = 28.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(28.dp))
+                    .background(accentSoft)
+                    .border(1.dp, border, RoundedCornerShape(28.dp))
+                    .padding(horizontal = 20.dp, vertical = 22.dp)
+            ) {
+                Column {
+                    Text(
+                        text = "How can we help?",
+                        color = primaryText,
+                        fontSize = 22.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(7.dp))
+                    Text(
+                        text = "Find quick answers to common PurrFect questions or prepare a support request.",
+                        color = secondaryText,
+                        fontSize = 14.sp,
+                        lineHeight = 21.sp
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
+            SettingsSectionTitle("Frequently Asked Questions")
+
+            SettingsCard {
+                faqs.forEachIndexed { index, faq ->
+                    val question = faq.first
+                    val answer = faq.second
+                    val expanded = expandedFaq == question
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                expandedFaq = if (expanded) null else question
+                            }
+                            .padding(horizontal = 17.dp, vertical = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(34.dp)
+                                .clip(CircleShape)
+                                .background(accentSoft),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "?",
+                                color = accent,
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = question,
+                                color = primaryText,
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                lineHeight = 20.sp
+                            )
+                            if (expanded) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Text(
+                                    text = answer,
+                                    color = secondaryText,
+                                    fontSize = 13.sp,
+                                    lineHeight = 19.sp
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Icon(
+                            imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                            contentDescription = if (expanded) "Collapse" else "Expand",
+                            tint = secondaryText,
+                            modifier = Modifier.size(23.dp)
+                        )
+                    }
+
+                    if (index < faqs.lastIndex) {
+                        SettingsDivider()
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
+            SettingsSectionTitle("Contact Support")
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(24.dp))
+                    .background(cardBackground)
+                    .border(1.dp, border, RoundedCornerShape(24.dp))
+                    .clickable { openEmailComposer() }
+                    .padding(horizontal = 18.dp, vertical = 18.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(48.dp)
+                            .clip(CircleShape)
+                            .background(accentSoft),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Email,
+                            contentDescription = null,
+                            tint = accent,
+                            modifier = Modifier.size(25.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(14.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Email Support",
+                            color = primaryText,
+                            fontSize = 17.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.height(3.dp))
+                        Text(
+                            text = "Open your email app with a ready-to-fill support request.",
+                            color = secondaryText,
+                            fontSize = 13.sp,
+                            lineHeight = 18.sp
+                        )
+                    }
+                    Icon(
+                        imageVector = Icons.Outlined.ChevronRight,
+                        contentDescription = null,
+                        tint = secondaryText,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(18.dp))
+            Text(
+                text = "Tip: When reporting a problem, include what you were doing, what happened, and your Android version. Avoid sharing passwords, verification codes, API keys or other private credentials.",
+                color = secondaryText,
+                fontSize = 12.sp,
+                lineHeight = 18.sp,
+                modifier = Modifier.padding(horizontal = 6.dp)
+            )
+        }
+    }
+}
+
+/* =========================================================
+ABOUT PURRFECT SCREEN
+========================================================= */
+@Composable
+fun AboutPurrFectScreen(
+    onBack: () -> Unit
+) {
+    var showTermsDialog by remember { mutableStateOf(false) }
+    var showPrivacyDialog by remember { mutableStateOf(false) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(purrFectColor(Color(0xFFFFF9F6), Color(0xFF151326)))
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(62.dp)
+                .padding(horizontal = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(onClick = onBack) {
+                Icon(
+                    imageVector = Icons.Outlined.ArrowBack,
+                    contentDescription = "Back",
+                    tint = purrFectColor(Color(0xFF20243A), Color(0xFFF7F3FA)),
+                    modifier = Modifier.size(25.dp)
+                )
+            }
+            Text(
+                text = "About PurrFect",
+                color = purrFectColor(Color(0xFF20243A), Color(0xFFF7F3FA)),
+                fontSize = 25.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.weight(1f)
+            )
+            Icon(
+                imageVector = Icons.Outlined.Info,
+                contentDescription = null,
+                tint = purrFectColor(Color(0xFFE95270), Color(0xFFF45A9A)),
+                modifier = Modifier.padding(end = 12.dp).size(25.dp)
+            )
+        }
+
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 18.dp)
+                .padding(bottom = 28.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(28.dp))
+                    .background(purrFectColor(Color(0xFFFFFDFB), Color(0xFF211E35)))
+                    .border(1.dp, purrFectColor(Color(0xFFF2E5E2), Color(0xFF3A344D)), RoundedCornerShape(28.dp))
+                    .padding(horizontal = 22.dp, vertical = 24.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Image(
+                        painter = painterResource(R.drawable.purrfect_logo),
+                        contentDescription = "PurrFect logo",
+                        contentScale = ContentScale.Fit,
+                        modifier = Modifier
+                            .fillMaxWidth(0.68f)
+                            .height(145.dp)
+                    )
+                    Text(
+                        text = "Version 1.0",
+                        color = purrFectColor(Color(0xFF7C8294), Color(0xFFA8A3B5)),
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(18.dp))
+            SettingsSectionTitle("About")
+            SettingsCard {
+                Column(modifier = Modifier.padding(horizontal = 18.dp, vertical = 18.dp)) {
+                    Text(
+                        text = "PurrFect is a cat-focused social and adoption app designed to help cat lovers discover cats, create cat profiles, find matches, chat and explore adoption opportunities.",
+                        color = purrFectColor(Color(0xFF6F6870), Color(0xFFB8B3C5)),
+                        fontSize = 14.sp,
+                        lineHeight = 21.sp
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(18.dp))
+            SettingsSectionTitle("Features")
+            SettingsCard {
+                AboutFeatureRow(Icons.Outlined.Search, "Discover Cats", "Explore cat profiles around you")
+                SettingsDivider()
+                AboutFeatureRow(Icons.Outlined.FavoriteBorder, "Matches & Likes", "Connect with cats you like")
+                SettingsDivider()
+                AboutFeatureRow(Icons.Outlined.ChatBubbleOutline, "Chat", "Talk with other cat lovers")
+                SettingsDivider()
+                AboutFeatureRow(Icons.Outlined.Home, "Adoption", "Discover cats looking for a home")
+                SettingsDivider()
+                AboutFeatureRow(Icons.Outlined.Pets, "My Cat Profiles", "Create and manage your cat profiles")
+            }
+
+            Spacer(modifier = Modifier.height(18.dp))
+            SettingsSectionTitle("Legal & Information")
+            SettingsCard {
+                SettingsNavigationRow(
+                    icon = Icons.Outlined.Description,
+                    iconColor = purrFectColor(Color(0xFFE88B4A), Color(0xFFE08648)),
+                    iconBackground = purrFectColor(Color(0xFFFFEBDC), Color(0xFF211E35)),
+                    title = "Terms & Conditions",
+                    subtitle = "App usage terms",
+                    onClick = { showTermsDialog = true }
+                )
+                SettingsDivider()
+                SettingsNavigationRow(
+                    icon = Icons.Outlined.Shield,
+                    iconColor = purrFectColor(Color(0xFF7952C8), Color(0xFF8A5BD1)),
+                    iconBackground = purrFectColor(Color(0xFFF0E5FF), Color(0xFF211E35)),
+                    title = "Privacy Policy",
+                    subtitle = "How app data is handled",
+                    onClick = { showPrivacyDialog = true }
+                )
+            }
+
+            Spacer(modifier = Modifier.height(18.dp))
+            Text(
+                text = "Developed by PurrFect Team",
+                color = purrFectColor(Color(0xFF7C8294), Color(0xFFA8A3B5)),
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(modifier = Modifier.height(5.dp))
+            Text(
+                text = "© 2026 PurrFect",
+                color = purrFectColor(Color(0xFF9A9298), Color(0xFF777185)),
+                fontSize = 12.sp
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "Made with ❤️ for cat lovers",
+                color = purrFectColor(Color(0xFFE95270), Color(0xFFF45A9A)),
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium
+            )
+        }
+    }
+
+    if (showTermsDialog) {
+        AlertDialog(
+            onDismissRequest = { showTermsDialog = false },
+            title = { Text("Terms & Conditions", fontWeight = FontWeight.Bold) },
+            text = { Text("PurrFect is intended for responsible use by its users. App features, content and availability may change as the application develops.") },
+            confirmButton = {
+                TextButton(onClick = { showTermsDialog = false }) {
+                    Text("Close", color = Pink)
+                }
+            }
+        )
+    }
+
+    if (showPrivacyDialog) {
+        AlertDialog(
+            onDismissRequest = { showPrivacyDialog = false },
+            title = { Text("Privacy Policy", fontWeight = FontWeight.Bold) },
+            text = { Text("PurrFect uses account and cat-profile information to provide its features. You can review available privacy controls from Settings → Privacy.") },
+            confirmButton = {
+                TextButton(onClick = { showPrivacyDialog = false }) {
+                    Text("Close", color = Pink)
+                }
+            }
+        )
+    }
+}
+
+@Composable
+private fun AboutFeatureRow(
+    icon: ImageVector,
+    title: String,
+    subtitle: String
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(48.dp)
+                .clip(RoundedCornerShape(16.dp))
+                .background(purrFectColor(Color(0xFFFFE4E9), Color(0xFF211E35))),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = purrFectColor(Color(0xFFE95270), Color(0xFFF45A9A)),
+                modifier = Modifier.size(24.dp)
+            )
+        }
+        Spacer(modifier = Modifier.width(14.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                color = purrFectColor(Color(0xFF20243A), Color(0xFFF7F3FA)),
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(modifier = Modifier.height(3.dp))
+            Text(
+                text = subtitle,
+                color = purrFectColor(Color(0xFF7C8294), Color(0xFFA8A3B5)),
+                fontSize = 13.sp
+            )
+        }
+    }
+}
+
+/* =========================================================
+SETTINGS SCREEN
+========================================================= */
+@Composable
+fun SettingsScreen(
+    profile: CatProfile,
+    user: BackendUser?,
+    onBack: () -> Unit,
+    onEditProfile: () -> Unit,
+    onMyCatProfiles: () -> Unit,
+    onAccountSecurity: () -> Unit,
+    notificationsEnabled: Boolean,
+    onNotificationsEnabledChange: (Boolean) -> Unit,
+    darkModeEnabled: Boolean,
+    onDarkModeEnabledChange: (Boolean) -> Unit,
+    distanceUnit: String,
+    onDistanceUnitChange: (String) -> Unit,
+    language: String,
+    onLanguageChange: (String) -> Unit,
+    onNotificationsPage: () -> Unit,
+    onPrivacyPage: () -> Unit,
+    onHelpSupportPage: () -> Unit,
+    onAboutPage: () -> Unit,
+    onLogout: () -> Unit
+) {
+    val context = LocalContext.current
+    var showDistanceDialog by remember { mutableStateOf(false) }
+    var showLanguageDialog by remember { mutableStateOf(false) }
+    var showLogoutDialog by remember { mutableStateOf(false) }
+
+    val displayName = user?.name?.takeIf { it.isNotBlank() } ?: "PurrFect User"
+    val username = user?.name
+        ?.trim()
+        ?.lowercase(Locale.getDefault())
+        ?.replace("[^a-z0-9]".toRegex(), "")
+        ?.takeIf { it.isNotBlank() }
+        ?.let { "@$it" }
+        ?: "@user"
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(purrFectColor(Color(0xFFFFF9F6), Color(0xFF151326)))
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(62.dp)
+                .padding(horizontal = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(onClick = onBack) {
+                Icon(
+                    imageVector = Icons.Outlined.ArrowBack,
+                    contentDescription = "Back",
+                    tint = purrFectColor(Color(0xFF20243A), Color(0xFFF7F3FA)),
+                    modifier = Modifier.size(25.dp)
+                )
+            }
+            Text(
+                text = "Settings",
+                color = purrFectColor(Color(0xFF20243A), Color(0xFFF7F3FA)),
+                fontSize = 25.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.weight(1f)
+            )
+            Text(
+                text = "♥",
+                color = purrFectColor(Color(0xFFFFB5C2), Color(0xFFFF8FC0)),
+                fontSize = 25.sp,
+                modifier = Modifier.padding(end = 12.dp)
+            )
+        }
+
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 18.dp)
+                .padding(bottom = 28.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(28.dp))
+                    .background(purrFectColor(Color(0xFFFFFDFB), Color(0xFF151326)))
+                    .border(1.dp, purrFectColor(Color(0xFFFFD8DF), Color(0xFF211E35)), RoundedCornerShape(28.dp))
+                    .clickable(onClick = onEditProfile)
+                    .padding(horizontal = 18.dp, vertical = 18.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(78.dp)
+                            .clip(CircleShape)
+                            .border(3.dp, purrFectColor(Color(0xFFFF6684), Color(0xFFF45A9A)), CircleShape)
+                    ) {
+                        if (profile.photoBitmap != null) {
+                            Image(
+                                bitmap = profile.photoBitmap.asImageBitmap(),
+                                contentDescription = "Profile photo",
+                                modifier = Modifier.fillMaxSize(),
+                                contentScale = ContentScale.Crop
+                            )
+                        } else {
+                            Image(
+                                painter = painterResource(R.drawable.simba),
+                                contentDescription = "Profile photo",
+                                modifier = Modifier.fillMaxSize(),
+                                contentScale = ContentScale.Crop
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.width(15.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = displayName,
+                            color = purrFectColor(Color(0xFF20243A), Color(0xFFF7F3FA)),
+                            fontSize = 19.sp,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = username,
+                            color = purrFectColor(Color(0xFF7C8294), Color(0xFFA8A3B5)),
+                            fontSize = 14.sp
+                        )
+                    }
+                    Icon(
+                        imageVector = Icons.Outlined.ChevronRight,
+                        contentDescription = null,
+                        tint = purrFectColor(Color(0xFF73798A), Color(0xFFA8A3B5)),
+                        modifier = Modifier.size(26.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(18.dp))
+            SettingsSectionTitle("Account")
+            SettingsCard {
+                SettingsNavigationRow(
+                    icon = Icons.Outlined.PersonOutline,
+                    iconColor = purrFectColor(Color(0xFFE95270), Color(0xFFF45A9A)),
+                    iconBackground = purrFectColor(Color(0xFFFFE4E9), Color(0xFF211E35)),
+                    title = "Edit Profile",
+                    subtitle = "Update your name, bio and photos",
+                    onClick = onEditProfile
+                )
+                SettingsDivider()
+                SettingsNavigationRow(
+                    icon = Icons.Outlined.Pets,
+                    iconColor = purrFectColor(Color(0xFF7952C8), Color(0xFF8A5BD1)),
+                    iconBackground = purrFectColor(Color(0xFFF0E5FF), Color(0xFF211E35)),
+                    title = "My Cat Profiles",
+                    subtitle = "Manage your cats",
+                    onClick = onMyCatProfiles
+                )
+                SettingsDivider()
+                SettingsNavigationRow(
+                    icon = Icons.Outlined.Lock,
+                    iconColor = purrFectColor(Color(0xFFE88B4A), Color(0xFFE08648)),
+                    iconBackground = purrFectColor(Color(0xFFFFEBDC), Color(0xFF211E35)),
+                    title = "Account & Security",
+                    subtitle = "Email, password and security",
+                    onClick = onAccountSecurity
+                )
+            }
+
+            Spacer(modifier = Modifier.height(18.dp))
+            SettingsSectionTitle("Preferences")
+            SettingsCard {
+                SettingsNavigationRow(
+                    icon = Icons.Outlined.Notifications,
+                    iconColor = purrFectColor(Color(0xFFE95270), Color(0xFFF45A9A)),
+                    iconBackground = purrFectColor(Color(0xFFFFE4E9), Color(0xFF211E35)),
+                    title = "Notifications",
+                    subtitle = "Manage notification preferences",
+                    onClick = onNotificationsPage
+                )
+                SettingsDivider()
+                SettingsSwitchRow(
+                    icon = Icons.Outlined.DarkMode,
+                    iconColor = purrFectColor(Color(0xFF7952C8), Color(0xFF8A5BD1)),
+                    iconBackground = purrFectColor(Color(0xFFF0E5FF), Color(0xFF211E35)),
+                    title = "Dark Mode",
+                    subtitle = "Switch between light and dark theme",
+                    checked = darkModeEnabled,
+                    onCheckedChange = onDarkModeEnabledChange
+                )
+                SettingsDivider()
+                SettingsNavigationRow(
+                    icon = Icons.Outlined.Language,
+                    iconColor = purrFectColor(Color(0xFFE88B4A), Color(0xFFE08648)),
+                    iconBackground = purrFectColor(Color(0xFFFFEBDC), Color(0xFF211E35)),
+                    title = "Language",
+                    subtitle = language,
+                    onClick = { showLanguageDialog = true }
+                )
+                SettingsDivider()
+                SettingsNavigationRow(
+                    icon = Icons.Outlined.LocationOn,
+                    iconColor = purrFectColor(Color(0xFFE95270), Color(0xFFF45A9A)),
+                    iconBackground = purrFectColor(Color(0xFFFFE4E9), Color(0xFF211E35)),
+                    title = "Distance Unit",
+                    subtitle = distanceUnit,
+                    onClick = { showDistanceDialog = true }
+                )
+            }
+
+            Spacer(modifier = Modifier.height(18.dp))
+            SettingsSectionTitle("App")
+            SettingsCard {
+                SettingsNavigationRow(
+                    icon = Icons.Outlined.Shield,
+                    iconColor = purrFectColor(Color(0xFF7952C8), Color(0xFF8A5BD1)),
+                    iconBackground = purrFectColor(Color(0xFFF0E5FF), Color(0xFF211E35)),
+                    title = "Privacy",
+                    subtitle = "Manage your data and visibility",
+                    onClick = onPrivacyPage
+                )
+                SettingsDivider()
+                SettingsNavigationRow(
+                    icon = Icons.Outlined.HelpOutline,
+                    iconColor = purrFectColor(Color(0xFFE88B4A), Color(0xFFE08648)),
+                    iconBackground = purrFectColor(Color(0xFFFFEBDC), Color(0xFF211E35)),
+                    title = "Help & Support",
+                    subtitle = "FAQs, troubleshooting and contact",
+                    onClick = onHelpSupportPage
+                )
+                SettingsDivider()
+                SettingsNavigationRow(
+                    icon = Icons.Outlined.Info,
+                    iconColor = purrFectColor(Color(0xFFE95270), Color(0xFFF45A9A)),
+                    iconBackground = purrFectColor(Color(0xFFFFE4E9), Color(0xFF211E35)),
+                    title = "About PurrFect",
+                    subtitle = "App version, features and information",
+                    onClick = onAboutPage
+                )
+            }
+
+            Spacer(modifier = Modifier.height(18.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(25.dp))
+                    .background(purrFectColor(Color(0xFFFFE7EC), Color(0xFF211E35)))
+                    .clickable { showLogoutDialog = true }
+                    .padding(horizontal = 20.dp, vertical = 17.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.Logout,
+                    contentDescription = "Logout",
+                    tint = purrFectColor(Color(0xFFE95270), Color(0xFFF45A9A)),
+                    modifier = Modifier.size(27.dp)
+                )
+                Spacer(modifier = Modifier.width(18.dp))
+                Text(
+                    text = "Logout",
+                    color = purrFectColor(Color(0xFFE95270), Color(0xFFF45A9A)),
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f)
+                )
+                Icon(
+                    imageVector = Icons.Outlined.ChevronRight,
+                    contentDescription = null,
+                    tint = purrFectColor(Color(0xFF73798A), Color(0xFFA8A3B5)),
+                    modifier = Modifier.size(25.dp)
+                )
+            }
+        }
+    }
+
+    if (showLanguageDialog) {
+        AlertDialog(
+            onDismissRequest = { showLanguageDialog = false },
+            title = { Text("Language", fontWeight = FontWeight.Bold) },
+            text = {
+                Column {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(16.dp))
+                            .clickable {
+                                onLanguageChange("English")
+                                showLanguageDialog = false
+                            }
+                            .padding(horizontal = 14.dp, vertical = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RadioButton(
+                            selected = language == "English",
+                            onClick = {
+                                onLanguageChange("English")
+                                showLanguageDialog = false
+                            },
+                            colors = RadioButtonDefaults.colors(
+                                selectedColor = Pink
+                            )
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "English",
+                                color = purrFectColor(Color(0xFF20243A), Color(0xFFF7F3FA)),
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                text = "Currently supported",
+                                color = purrFectColor(Color(0xFF7C8294), Color(0xFFA8A3B5)),
+                                fontSize = 12.sp
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showLanguageDialog = false }) {
+                    Text("Close", color = Pink)
+                }
+            }
+        )
+    }
+
+    if (showDistanceDialog) {
+        AlertDialog(
+            onDismissRequest = { showDistanceDialog = false },
+            title = { Text("Distance Unit", fontWeight = FontWeight.Bold) },
+            text = {
+                Column {
+                    TextButton(onClick = {
+                        onDistanceUnitChange("Kilometres (km)")
+                        showDistanceDialog = false
+                    }) { Text("Kilometres (km)", color = Pink) }
+                    TextButton(onClick = {
+                        onDistanceUnitChange("Miles (mi)")
+                        showDistanceDialog = false
+                    }) { Text("Miles (mi)", color = Pink) }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showDistanceDialog = false }) {
+                    Text("Close", color = TextGrey)
+                }
+            }
+        )
+    }
+
+    if (showLogoutDialog) {
+        AlertDialog(
+            onDismissRequest = { showLogoutDialog = false },
+            title = { Text("Logout?", fontWeight = FontWeight.Bold) },
+            text = { Text("Are you sure you want to logout from PurrFect?") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showLogoutDialog = false
+                    onLogout()
+                }) { Text("Logout", color = Pink, fontWeight = FontWeight.Bold) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showLogoutDialog = false }) {
+                    Text("Cancel", color = TextGrey)
+                }
+            }
+        )
+    }
+}
+
+@Composable
+private fun SettingsSectionTitle(title: String) {
+    Text(
+        text = title,
+        color = purrFectColor(Color(0xFF72798B), Color(0xFFA8A3B5)),
+        fontSize = 17.sp,
+        fontWeight = FontWeight.Bold,
+        modifier = Modifier.padding(start = 8.dp, bottom = 8.dp)
+    )
+}
+
+@Composable
+private fun SettingsCard(content: @Composable ColumnScope.() -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(27.dp))
+            .background(purrFectColor(Color(0xFFFFFDFB), Color(0xFF151326)))
+            .border(1.dp, purrFectColor(Color(0xFFF2E5E2), Color(0xFF211E35)), RoundedCornerShape(27.dp)),
+        content = content
+    )
+}
+
+@Composable
+private fun SettingsDivider() {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 72.dp, end = 18.dp)
+            .height(1.dp)
+            .background(purrFectColor(Color(0xFFF0E6E3), Color(0xFF211E35)))
+    )
+}
+
+@Composable
+private fun SettingsNavigationRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    iconColor: Color,
+    iconBackground: Color,
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(52.dp)
+                .clip(RoundedCornerShape(17.dp))
+                .background(iconBackground),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = iconColor,
+                modifier = Modifier.size(27.dp)
+            )
+        }
+        Spacer(modifier = Modifier.width(16.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                color = purrFectColor(Color(0xFF20243A), Color(0xFFF7F3FA)),
+                fontSize = 17.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = subtitle,
+                color = purrFectColor(Color(0xFF7C8294), Color(0xFFA8A3B5)),
+                fontSize = 13.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        Icon(
+            imageVector = Icons.Outlined.ChevronRight,
+            contentDescription = null,
+            tint = purrFectColor(Color(0xFF73798A), Color(0xFFA8A3B5)),
+            modifier = Modifier.size(25.dp)
+        )
+    }
+}
+
+@Composable
+private fun SettingsSwitchRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    iconColor: Color,
+    iconBackground: Color,
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    onClick: (() -> Unit)? = null
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(52.dp)
+                .clip(RoundedCornerShape(17.dp))
+                .background(iconBackground),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = iconColor,
+                modifier = Modifier.size(27.dp)
+            )
+        }
+        Spacer(modifier = Modifier.width(16.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                color = purrFectColor(Color(0xFF20243A), Color(0xFFF7F3FA)),
+                fontSize = 17.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = subtitle,
+                color = purrFectColor(Color(0xFF7C8294), Color(0xFFA8A3B5)),
+                fontSize = 13.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange
         )
     }
 }
@@ -9551,7 +11593,7 @@ fun NavigationItem(
                 if (selected) {
                     Pink
                 } else {
-                    Color(0xFF81787B)
+                    purrFectColor(Color(0xFF81787B), Color(0xFFA8A3B5))
                 },
             modifier = Modifier
                 .size(21.dp)
@@ -9571,7 +11613,7 @@ fun NavigationItem(
                 if (selected) {
                     Pink
                 } else {
-                    Color(0xFF81787B)
+                    purrFectColor(Color(0xFF81787B), Color(0xFFA8A3B5))
                 },
             fontSize =
                 9.sp,
@@ -9711,8 +11753,8 @@ fun AdoptionScreen(
             colors = OutlinedTextFieldDefaults.colors(
                 focusedBorderColor = BorderColor,
                 unfocusedBorderColor = BorderColor,
-                focusedContainerColor = Color(0xFFF9F2F0),
-                unfocusedContainerColor = Color(0xFFF9F2F0)
+                focusedContainerColor = purrFectColor(Color(0xFFF9F2F0), Color(0xFF211E35)),
+                unfocusedContainerColor = purrFectColor(Color(0xFFF9F2F0), Color(0xFF211E35))
             ),
             singleLine = true
         )
@@ -9732,7 +11774,7 @@ fun AdoptionScreen(
                         modifier = Modifier
                             .size(68.dp)
                             .clip(RoundedCornerShape(18.dp))
-                            .background(if (selectedCategory == index) LightPink else Color(0xFFF1EAE8))
+                            .background(if (selectedCategory == index) LightPink else purrFectColor(Color(0xFFF1EAE8), Color(0xFF211E35)))
                             .border(
                                 1.dp,
                                 if (selectedCategory == index) Pink.copy(alpha = 0.3f) else Color.Transparent,
@@ -9816,7 +11858,7 @@ fun AdoptionScreen(
                                 .fillMaxWidth()
                                 .height(90.dp)
                                 .clip(RoundedCornerShape(22.dp))
-                                .background(Color(0xFFFAF1F0))
+                                .background(purrFectColor(Color(0xFFFAF1F0), Color(0xFF211E35)))
                                 .clickable { onCatClick(cat) }
                                 .padding(horizontal = 16.dp),
                             verticalAlignment = Alignment.CenterVertically
@@ -9825,7 +11867,7 @@ fun AdoptionScreen(
                                 modifier = Modifier
                                     .size(60.dp)
                                     .clip(RoundedCornerShape(14.dp))
-                                    .background(Color(0xFFE9E0DE)),
+                                    .background(purrFectColor(Color(0xFFE9E0DE), Color(0xFF211E35))),
                                 contentAlignment = Alignment.Center
                             ) {
                                 if (cat.photoBitmap != null) {
@@ -9941,7 +11983,7 @@ fun AdoptionDetailsScreen(
                     .fillMaxWidth()
                     .height(350.dp)
                     .clip(RoundedCornerShape(32.dp))
-                    .background(Color(0xFFE0D8D6))
+                    .background(purrFectColor(Color(0xFFE0D8D6), Color(0xFF302A46)))
             ) {
                 if (cat.photoBitmap != null) {
                     Image(
@@ -10227,7 +12269,7 @@ private fun NotificationEmptyState() {
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFFFCF9F9)),
+            .background(purrFectColor(Color(0xFFFCF9F9), Color(0xFF151326))),
         contentAlignment = Alignment.Center
     ) {
         Column(
@@ -10243,7 +12285,7 @@ private fun NotificationEmptyState() {
 
             Text(
                 text = "You're all caught up!",
-                color = Color(0xFF1C192B),
+                color = purrFectColor(Color(0xFF1C192B), Color(0xFFF7F3FA)),
                 fontSize = 25.sp,
                 fontWeight = FontWeight.ExtraBold
             )
@@ -10252,7 +12294,7 @@ private fun NotificationEmptyState() {
 
             Text(
                 text = "No more notifications for now.",
-                color = Color(0xFF5A5868),
+                color = purrFectColor(Color(0xFF5A5868), Color(0xFFA8A3B5)),
                 fontSize = 15.sp,
                 fontWeight = FontWeight.Normal
             )
@@ -10261,11 +12303,157 @@ private fun NotificationEmptyState() {
 
             Text(
                 text = "We'll let you know when something new happens.",
-                color = Color(0xFF5A5868),
+                color = purrFectColor(Color(0xFF5A5868), Color(0xFFA8A3B5)),
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Normal
             )
         }
+    }
+}
+
+@Composable
+private fun NotificationPreferenceDivider() {
+    androidx.compose.material3.HorizontalDivider(
+        color = purrFectColor(Color(0xFFF0E4E5), Color(0xFF211E35)),
+        thickness = 1.dp
+    )
+}
+
+@Composable
+private fun NotificationPreferenceRow(
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    enabled: Boolean = true,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 11.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                color = if (enabled) purrFectColor(Color(0xFF1C192B), Color(0xFFF7F3FA)) else purrFectColor(Color(0xFF9B9699), Color(0xFFA8A3B5)),
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = subtitle,
+                color = if (enabled) purrFectColor(Color(0xFF8E8E93), Color(0xFFA8A3B5)) else purrFectColor(Color(0xFFB8B3B5), Color(0xFFC5C0D0)),
+                fontSize = 11.sp
+            )
+        }
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            enabled = enabled
+        )
+    }
+}
+
+@Composable
+fun NotificationSettingsScreen(
+    notificationsEnabled: Boolean,
+    matchesEnabled: Boolean,
+    messagesEnabled: Boolean,
+    likesEnabled: Boolean,
+    adoptionEnabled: Boolean,
+    generalEnabled: Boolean,
+    onMasterNotificationChange: (Boolean) -> Unit,
+    onMatchesChange: (Boolean) -> Unit,
+    onMessagesChange: (Boolean) -> Unit,
+    onLikesChange: (Boolean) -> Unit,
+    onAdoptionChange: (Boolean) -> Unit,
+    onGeneralChange: (Boolean) -> Unit,
+    onBack: () -> Unit
+) {
+    Column(modifier = Modifier.fillMaxSize().background(purrFectColor(Color(0xFFFFF9F6), Color(0xFF151326)))) {
+        Row(
+            modifier = Modifier.fillMaxWidth().height(62.dp).padding(horizontal = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(onClick = onBack) {
+                Icon(Icons.Outlined.ArrowBack, contentDescription = "Back to Settings", tint = purrFectColor(Color(0xFF20243A), Color(0xFFF7F3FA)))
+            }
+            Text("Notification Settings", color = purrFectColor(Color(0xFF20243A), Color(0xFFF7F3FA)), fontSize = 24.sp, fontWeight = FontWeight.Bold)
+        }
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp, vertical = 16.dp)
+        ) {
+            Text(
+                text = "Notification preferences",
+                color = purrFectColor(Color(0xFF1C192B), Color(0xFFF7F3FA)),
+                fontSize = 17.sp,
+                fontWeight = FontWeight.Bold
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(Color.White)
+                    .border(1.dp, purrFectColor(Color(0xFFF0E4E5), Color(0xFF211E35)), RoundedCornerShape(20.dp))
+            ) {
+                NotificationPreferenceRow(
+                    title = "Master notifications",
+                    subtitle = "Enable or disable all PurrFect notifications",
+                    checked = notificationsEnabled,
+                    onCheckedChange = onMasterNotificationChange
+                )
+                NotificationPreferenceDivider()
+                NotificationPreferenceRow(
+                    title = "Matches",
+                    subtitle = "New mutual matches",
+                    checked = matchesEnabled && notificationsEnabled,
+                    enabled = notificationsEnabled,
+                    onCheckedChange = onMatchesChange
+                )
+                NotificationPreferenceDivider()
+                NotificationPreferenceRow(
+                    title = "Messages",
+                    subtitle = "New messages from matches",
+                    checked = messagesEnabled && notificationsEnabled,
+                    enabled = notificationsEnabled,
+                    onCheckedChange = onMessagesChange
+                )
+                NotificationPreferenceDivider()
+                NotificationPreferenceRow(
+                    title = "Likes / Stars",
+                    subtitle = "Likes and starred-cat activity",
+                    checked = likesEnabled && notificationsEnabled,
+                    enabled = notificationsEnabled,
+                    onCheckedChange = onLikesChange
+                )
+                NotificationPreferenceDivider()
+                NotificationPreferenceRow(
+                    title = "Adoption activity",
+                    subtitle = "Adoption requests and updates",
+                    checked = adoptionEnabled && notificationsEnabled,
+                    enabled = notificationsEnabled,
+                    onCheckedChange = onAdoptionChange
+                )
+                NotificationPreferenceDivider()
+                NotificationPreferenceRow(
+                    title = "General activity",
+                    subtitle = "Other PurrFect activity",
+                    checked = generalEnabled && notificationsEnabled,
+                    enabled = notificationsEnabled,
+                    onCheckedChange = onGeneralChange
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+
     }
 }
 
@@ -10281,7 +12469,7 @@ fun NotificationsScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFFFCF9F9))
+            .background(purrFectColor(Color(0xFFFCF9F9), Color(0xFF151326)))
     ) {
         // Top Bar
         Row(
@@ -10294,14 +12482,14 @@ fun NotificationsScreen(
                 Icon(
                     imageVector = Icons.Outlined.ArrowBack,
                     contentDescription = "Back",
-                    tint = Color(0xFF1C192B),
+                    tint = purrFectColor(Color(0xFF1C192B), Color(0xFFF7F3FA)),
                     modifier = Modifier.size(24.dp)
                 )
             }
 
             Text(
                 text = "Notifications",
-                color = Color(0xFF1C192B),
+                color = purrFectColor(Color(0xFF1C192B), Color(0xFFF7F3FA)),
                 fontSize = 24.sp,
                 fontWeight = FontWeight.ExtraBold,
                 modifier = Modifier.weight(1f)
@@ -10314,7 +12502,7 @@ fun NotificationsScreen(
                 ) {
                     Text(
                         text = "Mark all read",
-                        color = Color(0xFFE94057),
+                        color = purrFectColor(Color(0xFFE94057), Color(0xFFFF4F79)),
                         fontSize = 14.sp,
                         fontWeight = FontWeight.SemiBold
                     )
@@ -10323,11 +12511,14 @@ fun NotificationsScreen(
         }
 
         if (notifications.isEmpty()) {
-            NotificationEmptyState()
+            Box(modifier = Modifier.weight(1f)) {
+                NotificationEmptyState()
+            }
         } else {
             LazyColumn(
                 modifier = Modifier
-                    .fillMaxSize()
+                    .fillMaxWidth()
+                    .weight(1f)
                     .padding(horizontal = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
                 contentPadding = PaddingValues(top = 8.dp, bottom = 28.dp)
@@ -10335,8 +12526,8 @@ fun NotificationsScreen(
                 items(notifications, key = { it.id }) { notification ->
                     val isUnread = !notification.isRead
 
-                    val cardBackground = if (isUnread) Color(0xFFFFF0F3) else Color.White
-                    val borderColor = if (isUnread) Color(0xFFFDE0E7) else Color(0xFFEEEEEE)
+                    val cardBackground = if (isUnread) purrFectColor(Color(0xFFFFF0F3), Color(0xFF211E35)) else Color.White
+                    val borderColor = if (isUnread) purrFectColor(Color(0xFFFDE0E7), Color(0xFF211E35)) else purrFectColor(Color(0xFFEEEEEE), Color(0xFF211E35))
 
                     val categoryIcon = when (notification.type.lowercase(Locale.US)) {
                         "match", "like" -> Icons.Outlined.Favorite
@@ -10377,13 +12568,13 @@ fun NotificationsScreen(
                                     .padding(top = 2.dp)
                                     .size(32.dp)
                                     .clip(RoundedCornerShape(10.dp))
-                                    .background(Color(0xFFFFE3E8)),
+                                    .background(purrFectColor(Color(0xFFFFE3E8), Color(0xFF211E35))),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Icon(
                                     imageVector = categoryIcon,
                                     contentDescription = null,
-                                    tint = Color(0xFFE94057),
+                                    tint = purrFectColor(Color(0xFFE94057), Color(0xFFFF4F79)),
                                     modifier = Modifier.size(18.dp)
                                 )
                             }
@@ -10396,7 +12587,7 @@ fun NotificationsScreen(
                             ) {
                                 Text(
                                     text = if (titleText.isNotBlank()) titleText else "New Notification",
-                                    color = Color(0xFF1C192B),
+                                    color = purrFectColor(Color(0xFF1C192B), Color(0xFFF7F3FA)),
                                     fontSize = 16.sp,
                                     fontWeight = FontWeight.Bold
                                 )
@@ -10405,7 +12596,7 @@ fun NotificationsScreen(
 
                                 Text(
                                     text = messageText,
-                                    color = Color(0xFF2C283B),
+                                    color = purrFectColor(Color(0xFF2C283B), Color(0xFFF7F3FA)),
                                     fontSize = 14.sp,
                                     lineHeight = 19.sp
                                 )
@@ -10414,7 +12605,7 @@ fun NotificationsScreen(
                                     Spacer(modifier = Modifier.height(6.dp))
                                     Text(
                                         text = timeText,
-                                        color = Color(0xFF8E8E93),
+                                        color = purrFectColor(Color(0xFF8E8E93), Color(0xFFA8A3B5)),
                                         fontSize = 11.sp,
                                         fontWeight = FontWeight.Medium
                                     )
@@ -10429,7 +12620,7 @@ fun NotificationsScreen(
                                         .padding(top = 4.dp)
                                         .size(10.dp)
                                         .clip(CircleShape)
-                                        .background(Color(0xFFE94057))
+                                        .background(purrFectColor(Color(0xFFE94057), Color(0xFFFF4F79)))
                                 )
                             }
                         }
@@ -10446,13 +12637,13 @@ fun NotificationsScreen(
                                 Box(
                                     modifier = Modifier
                                         .clip(CircleShape)
-                                        .background(Color(0xFFECE6F6))
+                                        .background(purrFectColor(Color(0xFFECE6F6), Color(0xFF211E35)))
                                         .clickable { onMarkRead(notification.id) }
                                         .padding(horizontal = 14.dp, vertical = 7.dp)
                                 ) {
                                     Text(
                                         text = "Mark read",
-                                        color = Color(0xFF7C4DFF),
+                                        color = purrFectColor(Color(0xFF7C4DFF), Color(0xFF613CC7)),
                                         fontSize = 12.sp,
                                         fontWeight = FontWeight.SemiBold
                                     )
@@ -10464,13 +12655,13 @@ fun NotificationsScreen(
                             Box(
                                 modifier = Modifier
                                     .clip(CircleShape)
-                                    .background(Color(0xFFFFE3E8))
+                                    .background(purrFectColor(Color(0xFFFFE3E8), Color(0xFF211E35)))
                                     .clickable { onDelete(notification.id) }
                                     .padding(horizontal = 14.dp, vertical = 7.dp)
                             ) {
                                 Text(
                                     text = "Delete",
-                                    color = Color(0xFFE94057),
+                                    color = purrFectColor(Color(0xFFE94057), Color(0xFFFF4F79)),
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.SemiBold
                                 )
@@ -10482,6 +12673,3 @@ fun NotificationsScreen(
         }
     }
 }
-
-
-
