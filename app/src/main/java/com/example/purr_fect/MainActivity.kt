@@ -10,6 +10,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.Build
 import android.widget.Toast
+import android.util.Log
 import android.widget.ImageView
 import android.media.AudioManager
 import android.media.ToneGenerator
@@ -149,6 +150,9 @@ import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.revenuecat.purchases.LogLevel
 import com.revenuecat.purchases.Purchases
 import com.revenuecat.purchases.PurchasesConfiguration
+import com.revenuecat.purchases.CustomerInfo
+import com.revenuecat.purchases.PurchasesError
+import com.revenuecat.purchases.interfaces.LogInCallback
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -2010,6 +2014,29 @@ fun PurrFectApp() {
 // The existing UI stays the same; only the data source becomes real.
     LaunchedEffect(loggedInUser?.id) {
         val userId = loggedInUser?.id ?: return@LaunchedEffect
+
+        // Use the existing PurrFect backend user ID as RevenueCat's stable App User ID.
+        // This keeps purchases/entitlements attached to the same PurrFect account
+        // across sessions and devices.
+        Purchases.sharedInstance.logIn(
+            userId.toString(),
+            object : LogInCallback {
+                override fun onReceived(customerInfo: CustomerInfo, created: Boolean) {
+                    Log.d(
+                        "PurrFectRevenueCat",
+                        "RevenueCat user identified: $userId"
+                    )
+                }
+
+                override fun onError(error: PurchasesError) {
+                    Log.e(
+                        "PurrFectRevenueCat",
+                        "RevenueCat login failed: ${error.message}"
+                    )
+                }
+            }
+        )
+
         val backendCat = PurrFectApi.getCatByUserId(userId)
         if (backendCat != null) {
             catProfile = backendCat
