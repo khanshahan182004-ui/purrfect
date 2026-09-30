@@ -3218,6 +3218,7 @@ fun PurrFectApp() {
                                         isPremiumLoading = false
 
                                         if (userCancelled) {
+                                            premiumPurchaseError = "Purchase cancelled."
                                             Log.d(
                                                 "PurrFectRevenueCat",
                                                 "Premium purchase cancelled by user"
@@ -3250,8 +3251,44 @@ fun PurrFectApp() {
                                                 Toast.LENGTH_SHORT
                                             ).show()
                                         } else {
-                                            premiumPurchaseError =
-                                                "Purchase completed, but Premium is not active yet. Please try again in a moment."
+                                            // Re-read CustomerInfo once before showing a
+                                            // final inactive state. This protects against a
+                                            // short entitlement propagation delay after purchase.
+                                            Purchases.sharedInstance.getCustomerInfo(
+                                                object : ReceiveCustomerInfoCallback {
+                                                    override fun onReceived(refreshedCustomerInfo: CustomerInfo) {
+                                                        val refreshedPremiumActive =
+                                                            refreshedCustomerInfo.entitlements["purrfect_premium"]?.isActive == true
+                                                        isPremiumActive = refreshedPremiumActive
+
+                                                        Log.d(
+                                                            "PurrFectRevenueCat",
+                                                            "Premium post-purchase refresh: entitlement active: $refreshedPremiumActive"
+                                                        )
+
+                                                        if (refreshedPremiumActive) {
+                                                            showPremiumPurchaseDialog = false
+                                                            Toast.makeText(
+                                                                context,
+                                                                "PurrFect Premium activated!",
+                                                                Toast.LENGTH_SHORT
+                                                            ).show()
+                                                        } else {
+                                                            premiumPurchaseError =
+                                                                "Purchase completed, but Premium is not active yet. Please try again in a moment."
+                                                        }
+                                                    }
+
+                                                    override fun onError(error: PurchasesError) {
+                                                        premiumPurchaseError =
+                                                            "Purchase completed, but Premium status could not be refreshed yet. Please try again in a moment."
+                                                        Log.e(
+                                                            "PurrFectRevenueCat",
+                                                            "Premium post-purchase refresh failed: ${error.message}"
+                                                        )
+                                                    }
+                                                }
+                                            )
                                         }
                                     }
                                 )
