@@ -83,6 +83,7 @@ import androidx.compose.material.icons.outlined.Email
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.VisibilityOff
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.PersonOutline
@@ -152,6 +153,8 @@ import com.revenuecat.purchases.Purchases
 import com.revenuecat.purchases.PurchasesConfiguration
 import com.revenuecat.purchases.CustomerInfo
 import com.revenuecat.purchases.PurchasesError
+import com.revenuecat.purchases.PurchaseParams
+import com.revenuecat.purchases.purchaseWith
 import com.revenuecat.purchases.interfaces.LogInCallback
 import com.revenuecat.purchases.interfaces.ReceiveOfferingsCallback
 import androidx.compose.ui.text.font.FontFamily
@@ -1866,6 +1869,13 @@ fun PurrFectApp() {
     var currentPage by remember {
         mutableStateOf(if (savedUser != null) "main" else "welcome")
     }
+
+    var showPremiumPurchaseDialog by remember { mutableStateOf(false) }
+    var premiumOfferPackages by remember {
+        mutableStateOf<List<com.revenuecat.purchases.Package>>(emptyList())
+    }
+    var isPremiumLoading by remember { mutableStateOf(false) }
+    var premiumPurchaseError by remember { mutableStateOf<String?>(null) }
     // Remembers where Edit Cat Profile was opened from so Back/Save
     // returns to the correct screen without changing existing navigation.
     var editReturnPage by remember {
@@ -2892,11 +2902,36 @@ fun PurrFectApp() {
                 currentPage = "about"
             },
             onPremium = {
-                Toast.makeText(
-                    context,
-                    "PurrFect Premium will be available soon",
-                    Toast.LENGTH_SHORT
-                ).show()
+                showPremiumPurchaseDialog = true
+                isPremiumLoading = false
+                premiumPurchaseError = null
+                premiumOfferPackages = emptyList()
+
+                Purchases.sharedInstance.getOfferings(
+                    object : ReceiveOfferingsCallback {
+                        override fun onReceived(offerings: com.revenuecat.purchases.Offerings) {
+                            val currentOffering = offerings.current
+                            if (currentOffering == null) {
+                                premiumPurchaseError = "Premium plans are currently unavailable."
+                                return
+                            }
+
+                            premiumOfferPackages = currentOffering.availablePackages
+                            Log.d(
+                                "PurrFectRevenueCat",
+                                "Premium purchase dialog loaded ${premiumOfferPackages.size} packages"
+                            )
+                        }
+
+                        override fun onError(error: PurchasesError) {
+                            premiumPurchaseError = error.message
+                            Log.e(
+                                "PurrFectRevenueCat",
+                                "Premium purchase offerings failed: ${error.message}"
+                            )
+                        }
+                    }
+                )
             },
             onLogout = {
                 isSideMenuOpen = false
@@ -3004,6 +3039,143 @@ fun PurrFectApp() {
             }
         )
     }
+    if (showPremiumPurchaseDialog) {
+        AlertDialog(
+            onDismissRequest = {
+                if (!isPremiumLoading) {
+                    showPremiumPurchaseDialog = false
+                }
+            },
+            title = {
+                Text(
+                    text = "PurrFect Premium",
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Column {
+                    Text(
+                        text = if (isPremiumLoading) {
+                            "Processing your purchase..."
+                        } else {
+                            "Choose a premium plan to continue."
+                        },
+                        color = TextGrey
+                    )
+
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    premiumOfferPackages.forEach { packageItem ->
+                        val product = packageItem.product
+                        val label = when (packageItem.identifier) {
+                            "\$rc_monthly" -> "Monthly"
+                            "\$rc_annual" -> "Yearly"
+                            "\$rc_lifetime" -> "Lifetime"
+                            else -> product.id
+                        }
+
+                        OutlinedButton(
+                            onClick = {
+                                val activity = context as? ComponentActivity
+                                if (activity == null) {
+                                    premiumPurchaseError = "Unable to start the purchase right now."
+                                    return@OutlinedButton
+                                }
+
+                                isPremiumLoading = true
+                                premiumPurchaseError = null
+
+                                Purchases.sharedInstance.purchaseWith(
+                                    PurchaseParams.Builder(activity, packageItem).build(),
+                                    onError = { error, userCancelled ->
+                                        isPremiumLoading = false
+
+                                        if (userCancelled) {
+                                            Log.d(
+                                                "PurrFectRevenueCat",
+                                                "Premium purchase cancelled by user"
+                                            )
+                                        } else {
+                                            premiumPurchaseError = error.message
+                                            Log.e(
+                                                "PurrFectRevenueCat",
+                                                "Premium purchase failed: ${error.message}"
+                                            )
+                                        }
+                                    },
+                                    onSuccess = { _, customerInfo ->
+                                        val premiumActive =
+                                            customerInfo.entitlements["purrfect_premium"]?.isActive == true
+
+                                        Log.d(
+                                            "PurrFectRevenueCat",
+                                            "Premium purchase completed: ${product.id}, entitlement active: $premiumActive"
+                                        )
+
+                                        isPremiumLoading = false
+
+                                        if (premiumActive) {
+                                            showPremiumPurchaseDialog = false
+                                            Toast.makeText(
+                                                context,
+                                                "PurrFect Premium activated!",
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+                                        } else {
+                                            premiumPurchaseError =
+                                                "Purchase completed, but Premium is not active yet. Please try again in a moment."
+                                        }
+                                    }
+                                )
+                            },
+                            enabled = !isPremiumLoading,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp)
+                        ) {
+                            Column(horizontalAlignment = Alignment.Start) {
+                                Text(
+                                    text = label,
+                                    fontWeight = FontWeight.Bold,
+                                    color = TextDark
+                                )
+                                Text(
+                                    text = product.price.formatted,
+                                    color = TextGrey,
+                                    fontSize = 12.sp
+                                )
+                            }
+                        }
+                    }
+
+                    if (premiumOfferPackages.isEmpty() && premiumPurchaseError == null && !isPremiumLoading) {
+                        Text(
+                            text = "Loading premium plans...",
+                            color = TextGrey
+                        )
+                    }
+
+                    premiumPurchaseError?.let { error ->
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = error,
+                            color = Pink,
+                            fontSize = 12.sp
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = { showPremiumPurchaseDialog = false },
+                    enabled = !isPremiumLoading
+                ) {
+                    Text("Close")
+                }
+            }
+        )
+    }
+
 }
 /* =========================================================
 DISCOVER SIDE PANEL
