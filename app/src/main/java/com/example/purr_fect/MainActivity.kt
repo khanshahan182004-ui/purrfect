@@ -2556,6 +2556,24 @@ fun PurrFectApp() {
                         currentPage = "about"
                     },
                     onLogout = {
+                        isPremiumActive = false
+                        Purchases.sharedInstance.logOut(
+                            object : ReceiveCustomerInfoCallback {
+                                override fun onReceived(customerInfo: CustomerInfo) {
+                                    Log.d(
+                                        "PurrFectRevenueCat",
+                                        "RevenueCat user logged out; premium entitlement active: ${customerInfo.entitlements["purrfect_premium"]?.isActive == true}"
+                                    )
+                                }
+
+                                override fun onError(error: PurchasesError) {
+                                    Log.e(
+                                        "PurrFectRevenueCat",
+                                        "RevenueCat logout failed: ${error.message}"
+                                    )
+                                }
+                            }
+                        )
                         clearUserSession(context)
                         loggedInUser = null
                         catProfile = CatProfile(
@@ -2646,6 +2664,24 @@ fun PurrFectApp() {
                     user = loggedInUser,
                     onBack = { currentPage = "settings" },
                     onLogout = {
+                        isPremiumActive = false
+                        Purchases.sharedInstance.logOut(
+                            object : ReceiveCustomerInfoCallback {
+                                override fun onReceived(customerInfo: CustomerInfo) {
+                                    Log.d(
+                                        "PurrFectRevenueCat",
+                                        "RevenueCat user logged out; premium entitlement active: ${customerInfo.entitlements["purrfect_premium"]?.isActive == true}"
+                                    )
+                                }
+
+                                override fun onError(error: PurchasesError) {
+                                    Log.e(
+                                        "PurrFectRevenueCat",
+                                        "RevenueCat logout failed: ${error.message}"
+                                    )
+                                }
+                            }
+                        )
                         clearUserSession(context)
                         loggedInUser = null
                         catProfile = CatProfile(
@@ -2999,6 +3035,24 @@ fun PurrFectApp() {
             },
             onLogout = {
                 isSideMenuOpen = false
+                isPremiumActive = false
+                Purchases.sharedInstance.logOut(
+                    object : ReceiveCustomerInfoCallback {
+                        override fun onReceived(customerInfo: CustomerInfo) {
+                            Log.d(
+                                "PurrFectRevenueCat",
+                                "RevenueCat user logged out; premium entitlement active: ${customerInfo.entitlements["purrfect_premium"]?.isActive == true}"
+                            )
+                        }
+
+                        override fun onError(error: PurchasesError) {
+                            Log.e(
+                                "PurrFectRevenueCat",
+                                "RevenueCat logout failed: ${error.message}"
+                            )
+                        }
+                    }
+                )
                 clearUserSession(context)
                 loggedInUser = null
                 catProfile = CatProfile(
