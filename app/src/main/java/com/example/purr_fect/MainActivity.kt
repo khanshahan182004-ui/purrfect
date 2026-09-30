@@ -153,6 +153,7 @@ import com.revenuecat.purchases.PurchasesConfiguration
 import com.revenuecat.purchases.CustomerInfo
 import com.revenuecat.purchases.PurchasesError
 import com.revenuecat.purchases.interfaces.LogInCallback
+import com.revenuecat.purchases.interfaces.ReceiveOfferingsCallback
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -2022,9 +2023,59 @@ fun PurrFectApp() {
             userId.toString(),
             object : LogInCallback {
                 override fun onReceived(customerInfo: CustomerInfo, created: Boolean) {
+                    val premiumEntitlement =
+                        customerInfo.entitlements["purrfect_premium"]
+                    val premiumActive = premiumEntitlement?.isActive == true
+
                     Log.d(
                         "PurrFectRevenueCat",
                         "RevenueCat user identified: $userId"
+                    )
+                    Log.d(
+                        "PurrFectRevenueCat",
+                        "Premium entitlement active: $premiumActive"
+                    )
+
+                    // Checkpoint 4B: fetch the RevenueCat default offering
+                    // using the callback API supported by purchases 10.15.1.
+                    Purchases.sharedInstance.getOfferings(
+                        object : ReceiveOfferingsCallback {
+                            override fun onReceived(offerings: com.revenuecat.purchases.Offerings) {
+                                val currentOffering = offerings.current
+
+                                if (currentOffering == null) {
+                                    Log.e(
+                                        "PurrFectRevenueCat",
+                                        "RevenueCat current offering is null"
+                                    )
+                                    return
+                                }
+
+                                Log.d(
+                                    "PurrFectRevenueCat",
+                                    "RevenueCat current offering: ${currentOffering.identifier}"
+                                )
+
+                                currentOffering.availablePackages.forEach { packageItem ->
+                                    Log.d(
+                                        "PurrFectRevenueCat",
+                                        "RevenueCat package: ${packageItem.identifier}, product: ${packageItem.product.id}, price: ${packageItem.product.price.formatted}"
+                                    )
+                                }
+
+                                Log.d(
+                                    "PurrFectRevenueCat",
+                                    "RevenueCat package count: ${currentOffering.availablePackages.size}"
+                                )
+                            }
+
+                            override fun onError(error: PurchasesError) {
+                                Log.e(
+                                    "PurrFectRevenueCat",
+                                    "RevenueCat offerings fetch failed: ${error.message}"
+                                )
+                            }
+                        }
                     )
                 }
 
