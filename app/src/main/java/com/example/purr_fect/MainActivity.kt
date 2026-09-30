@@ -199,7 +199,7 @@ where the Node.js backend is running on port 5000.
 ========================================================= */
 private const val PURR_FECT_API_BASE_URL = "http://localhost:5000"
 
-// RevenueCat public SDK key.
+// RevenueCat public SDK key. Replace the placeholder with the test_ key
 // from the PurrFect RevenueCat Android app settings.
 private const val REVENUECAT_API_KEY = "test_mggxsNIqVHmJYNhshDFFKJvTSen"
 data class BackendUser(
@@ -3002,36 +3002,50 @@ fun PurrFectApp() {
                 currentPage = "about"
             },
             onPremium = {
-                showPremiumPurchaseDialog = true
-                isPremiumLoading = false
-                premiumPurchaseError = null
-                premiumOfferPackages = emptyList()
+                if (isPremiumActive) {
+                    Toast.makeText(
+                        context,
+                        "PurrFect Premium is already active.",
+                        Toast.LENGTH_SHORT
+                    ).show()
 
-                Purchases.sharedInstance.getOfferings(
-                    object : ReceiveOfferingsCallback {
-                        override fun onReceived(offerings: com.revenuecat.purchases.Offerings) {
-                            val currentOffering = offerings.current
-                            if (currentOffering == null) {
-                                premiumPurchaseError = "Premium plans are currently unavailable."
-                                return
+                    Log.d(
+                        "PurrFectRevenueCat",
+                        "Premium entry blocked because entitlement is already active"
+                    )
+                } else {
+                    showPremiumPurchaseDialog = true
+                    isPremiumLoading = false
+                    premiumPurchaseError = null
+                    premiumOfferPackages = emptyList()
+
+                    Purchases.sharedInstance.getOfferings(
+                        object : ReceiveOfferingsCallback {
+                            override fun onReceived(offerings: com.revenuecat.purchases.Offerings) {
+                                val currentOffering = offerings.current
+                                if (currentOffering == null) {
+                                    premiumPurchaseError =
+                                        "Premium plans are currently unavailable."
+                                    return
+                                }
+
+                                premiumOfferPackages = currentOffering.availablePackages
+                                Log.d(
+                                    "PurrFectRevenueCat",
+                                    "Premium purchase dialog loaded ${premiumOfferPackages.size} packages"
+                                )
                             }
 
-                            premiumOfferPackages = currentOffering.availablePackages
-                            Log.d(
-                                "PurrFectRevenueCat",
-                                "Premium purchase dialog loaded ${premiumOfferPackages.size} packages"
-                            )
+                            override fun onError(error: PurchasesError) {
+                                premiumPurchaseError = error.message
+                                Log.e(
+                                    "PurrFectRevenueCat",
+                                    "Premium purchase offerings failed: ${error.message}"
+                                )
+                            }
                         }
-
-                        override fun onError(error: PurchasesError) {
-                            premiumPurchaseError = error.message
-                            Log.e(
-                                "PurrFectRevenueCat",
-                                "Premium purchase offerings failed: ${error.message}"
-                            )
-                        }
-                    }
-                )
+                    )
+                }
             },
             onLogout = {
                 isSideMenuOpen = false
