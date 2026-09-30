@@ -3002,50 +3002,39 @@ fun PurrFectApp() {
                 currentPage = "about"
             },
             onPremium = {
-                if (isPremiumActive) {
-                    Toast.makeText(
-                        context,
-                        "PurrFect Premium is already active.",
-                        Toast.LENGTH_SHORT
-                    ).show()
+                // Keep the Premium dialog accessible even when the entitlement is already active.
+                // This lets an existing subscriber use Restore Purchases.
+                showPremiumPurchaseDialog = true
+                isPremiumLoading = false
+                premiumPurchaseError = null
+                premiumOfferPackages = emptyList()
 
-                    Log.d(
-                        "PurrFectRevenueCat",
-                        "Premium entry blocked because entitlement is already active"
-                    )
-                } else {
-                    showPremiumPurchaseDialog = true
-                    isPremiumLoading = false
-                    premiumPurchaseError = null
-                    premiumOfferPackages = emptyList()
-
-                    Purchases.sharedInstance.getOfferings(
-                        object : ReceiveOfferingsCallback {
-                            override fun onReceived(offerings: com.revenuecat.purchases.Offerings) {
-                                val currentOffering = offerings.current
-                                if (currentOffering == null) {
-                                    premiumPurchaseError =
-                                        "Premium plans are currently unavailable."
-                                    return
-                                }
-
-                                premiumOfferPackages = currentOffering.availablePackages
-                                Log.d(
-                                    "PurrFectRevenueCat",
-                                    "Premium purchase dialog loaded ${premiumOfferPackages.size} packages"
-                                )
+                Purchases.sharedInstance.getOfferings(
+                    object : ReceiveOfferingsCallback {
+                        override fun onReceived(offerings: com.revenuecat.purchases.Offerings) {
+                            val currentOffering = offerings.current
+                            if (currentOffering == null) {
+                                premiumPurchaseError =
+                                    "Premium plans are currently unavailable."
+                                return
                             }
 
-                            override fun onError(error: PurchasesError) {
-                                premiumPurchaseError = error.message
-                                Log.e(
-                                    "PurrFectRevenueCat",
-                                    "Premium purchase offerings failed: ${error.message}"
-                                )
-                            }
+                            premiumOfferPackages = currentOffering.availablePackages
+                            Log.d(
+                                "PurrFectRevenueCat",
+                                "Premium purchase dialog loaded ${premiumOfferPackages.size} packages"
+                            )
                         }
-                    )
-                }
+
+                        override fun onError(error: PurchasesError) {
+                            premiumPurchaseError = error.message
+                            Log.e(
+                                "PurrFectRevenueCat",
+                                "Premium purchase offerings failed: ${error.message}"
+                            )
+                        }
+                    }
+                )
             },
             onLogout = {
                 isSideMenuOpen = false
@@ -3208,6 +3197,12 @@ fun PurrFectApp() {
 
                         OutlinedButton(
                             onClick = {
+                                if (isPremiumActive) {
+                                    premiumPurchaseError =
+                                        "PurrFect Premium is already active. Use Restore Purchases if needed."
+                                    return@OutlinedButton
+                                }
+
                                 val activity = context as? ComponentActivity
                                 if (activity == null) {
                                     premiumPurchaseError = "Unable to start the purchase right now."
@@ -3285,6 +3280,70 @@ fun PurrFectApp() {
                         Text(
                             text = "Loading premium plans...",
                             color = TextGrey
+                        )
+                    }
+
+                    TextButton(
+                        onClick = {
+                            if (isPremiumLoading) return@TextButton
+
+                            isPremiumLoading = true
+                            premiumPurchaseError = null
+                            val wasPremiumActive = isPremiumActive
+
+                            Purchases.sharedInstance.restorePurchases(
+                                object : ReceiveCustomerInfoCallback {
+                                    override fun onReceived(customerInfo: CustomerInfo) {
+                                        val restoredPremiumActive =
+                                            customerInfo.entitlements["purrfect_premium"]?.isActive == true
+
+                                        // Never downgrade an entitlement that is already active
+                                        // just because the store restore callback returned false.
+                                        val finalPremiumActive =
+                                            restoredPremiumActive || wasPremiumActive
+                                        isPremiumActive = finalPremiumActive
+                                        isPremiumLoading = false
+
+                                        Log.d(
+                                            "PurrFectRevenueCat",
+                                            "Premium restore completed: entitlement active: $restoredPremiumActive"
+                                        )
+
+                                        if (finalPremiumActive) {
+                                            showPremiumPurchaseDialog = false
+                                            Toast.makeText(
+                                                context,
+                                                if (restoredPremiumActive) {
+                                                    "PurrFect Premium restored!"
+                                                } else {
+                                                    "PurrFect Premium is already active!"
+                                                },
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+                                        } else {
+                                            premiumPurchaseError =
+                                                "No active Premium purchase was found for this store account."
+                                        }
+                                    }
+
+                                    override fun onError(error: PurchasesError) {
+                                        isPremiumLoading = false
+                                        premiumPurchaseError = error.message
+
+                                        Log.e(
+                                            "PurrFectRevenueCat",
+                                            "Premium restore failed: ${error.message}"
+                                        )
+                                    }
+                                }
+                            )
+                        },
+                        enabled = !isPremiumLoading
+                    ) {
+                        Text(
+                            text = "Restore Purchases",
+                            color = Pink,
+                            fontWeight = FontWeight.SemiBold
                         )
                     }
 
