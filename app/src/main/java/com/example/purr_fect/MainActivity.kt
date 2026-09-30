@@ -11,6 +11,8 @@ import android.os.Bundle
 import android.os.Build
 import android.widget.Toast
 import android.widget.ImageView
+import android.media.AudioManager
+import android.media.ToneGenerator
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -138,15 +140,20 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.credentials.CredentialManager
 import androidx.credentials.CustomCredential
 import androidx.credentials.GetCredentialRequest
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
+import com.revenuecat.purchases.LogLevel
+import com.revenuecat.purchases.Purchases
+import com.revenuecat.purchases.PurchasesConfiguration
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -180,6 +187,10 @@ For Android Studio emulator use 10.0.2.2 to reach the PC
 where the Node.js backend is running on port 5000.
 ========================================================= */
 private const val PURR_FECT_API_BASE_URL = "http://localhost:5000"
+
+// RevenueCat public SDK key. Replace the placeholder with the test_ key
+// from the PurrFect RevenueCat Android app settings.
+private const val REVENUECAT_API_KEY = "test_mggxsNIqVHmJYNhshDFFKJvTSen"
 data class BackendUser(
     val id: Int,
     val name: String,
@@ -218,6 +229,55 @@ private const val PREF_NOTIFICATIONS_GENERAL = "settings_notifications_general"
 // backend exposes matching server-side controls.
 // =========================================================
 private const val PREF_PRIVACY_ONLINE_STATUS = "privacy_online_status_enabled"
+
+// =========================================================
+// SOUND + HAPTIC PREFERENCES
+// =========================================================
+private const val PREF_SOUNDS_MASTER = "settings_sounds_enabled"
+private const val PREF_SOUND_MATCH = "settings_sound_match"
+private const val PREF_SOUND_MESSAGE = "settings_sound_message"
+private const val PREF_SOUND_LIKE = "settings_sound_like"
+private const val PREF_SOUND_STAR = "settings_sound_star"
+private const val PREF_HAPTIC_FEEDBACK = "settings_haptic_feedback_enabled"
+
+private object PurrFectSoundManager {
+    private fun prefs(context: Context) =
+        context.getSharedPreferences(PURR_FECT_SESSION_PREFS, Context.MODE_PRIVATE)
+
+    private fun enabled(context: Context, category: String): Boolean {
+        val p = prefs(context)
+        if (!p.getBoolean(PREF_SOUNDS_MASTER, true)) return false
+        return p.getBoolean(category, true)
+    }
+
+    fun play(context: Context, category: String, tone: Int) {
+        if (!enabled(context, category)) return
+        try {
+            ToneGenerator(AudioManager.STREAM_NOTIFICATION, 70).apply {
+                startTone(tone, 130)
+                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ release() }, 180)
+            }
+        } catch (_: Exception) {
+            // Sound must never interrupt the app if audio is unavailable.
+        }
+    }
+
+    fun playMatch(context: Context) {
+        if (!enabled(context, PREF_SOUND_MATCH)) return
+        try {
+            val first = ToneGenerator(AudioManager.STREAM_NOTIFICATION, 75)
+            first.startTone(ToneGenerator.TONE_PROP_ACK, 140)
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                first.release()
+                try {
+                    val second = ToneGenerator(AudioManager.STREAM_NOTIFICATION, 75)
+                    second.startTone(ToneGenerator.TONE_PROP_PROMPT, 180)
+                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ second.release() }, 220)
+                } catch (_: Exception) { }
+            }, 160)
+        } catch (_: Exception) { }
+    }
+}
 
 private fun notificationPreferences(context: Context) =
     context.getSharedPreferences(PURR_FECT_SESSION_PREFS, Context.MODE_PRIVATE)
@@ -525,36 +585,102 @@ private object PurrFectApi {
             connection.disconnect()
         }
     }
-    private fun absolutePhotoUrl(photoUrl: String): String {
-        return if (photoUrl.startsWith("http://") || photoUrl.startsWith("https://")) {
-            photoUrl
-        } else {
-            PURR_FECT_API_BASE_URL +
-                    if (photoUrl.startsWith("/")) photoUrl else "/$photoUrl"
+    private fun photoUrlCandidates(photoUrl: String): List<String> {
+        val cleaned = photoUrl.trim()
+        if (cleaned.isBlank() || cleaned.equals("null", ignoreCase = true)) return emptyList()
+
+        val path = if (cleaned.startsWith("/")) cleaned else "/$cleaned"
+        val candidates = linkedSetOf<String>()
+
+        fun addAbsolute(value: String) {
+            val normalized = value.trim()
+            if (normalized.isNotBlank()) candidates.add(normalized)
         }
-    }
-    private suspend fun downloadBitmap(photoUrl: String): Bitmap? = withContext(Dispatchers.IO) {
-        try {
-            val connection =
-                (URL(absolutePhotoUrl(photoUrl)).openConnection() as HttpURLConnection).apply {
-                    requestMethod = "GET"
-                    connectTimeout = 10000
-                    readTimeout = 10000
-                    doInput = true
+
+        if (cleaned.startsWith("http://") || cleaned.startsWith("https://")) {
+            addAbsolute(cleaned)
+
+            // When a locally saved URL points at localhost, also try the
+            // standard Android emulator host aliases. This affects only
+            // remote photo loading; the existing API base URL is unchanged.
+            runCatching {
+                val uri = android.net.Uri.parse(cleaned)
+                val host = uri.host?.lowercase(Locale.US)
+                if (host == "localhost" || host == "127.0.0.1" || host == "0.0.0.0") {
+                    val portPart = if (uri.port != -1) ":${uri.port}" else ""
+                    val suffix = uri.encodedPath.orEmpty() +
+                            if (!uri.encodedQuery.isNullOrBlank()) "?${uri.encodedQuery}" else ""
+                    addAbsolute("http://10.0.2.2$portPart$suffix")
+                    addAbsolute("http://10.0.3.2$portPart$suffix")
                 }
-            try {
-                if (connection.responseCode !in 200..299) {
-                    return@withContext null
-                }
-                connection.inputStream.use { input ->
-                    BitmapFactory.decodeStream(input)
-                }
-            } finally {
-                connection.disconnect()
             }
-        } catch (_: Exception) {
-            null
+        } else {
+            addAbsolute(PURR_FECT_API_BASE_URL.trimEnd('/') + path)
+            addAbsolute("http://10.0.2.2:5000$path")
+            addAbsolute("http://10.0.3.2:5000$path")
         }
+
+        return candidates.toList()
+    }
+
+    private fun absolutePhotoUrl(photoUrl: String): String {
+        return photoUrlCandidates(photoUrl).firstOrNull().orEmpty()
+    }
+
+    private suspend fun downloadBitmap(photoUrl: String): Bitmap? = withContext(Dispatchers.IO) {
+        val cleanedPhotoUrl = photoUrl.trim()
+        if (cleanedPhotoUrl.isBlank() || cleanedPhotoUrl.equals("null", ignoreCase = true)) {
+            return@withContext null
+        }
+
+        val candidateUrls = photoUrlCandidates(cleanedPhotoUrl)
+        if (candidateUrls.isEmpty()) return@withContext null
+
+        for (candidateUrl in candidateUrls) {
+            repeat(2) { attempt ->
+                try {
+                    val connection =
+                        (URL(candidateUrl).openConnection() as HttpURLConnection).apply {
+                            requestMethod = "GET"
+                            connectTimeout = 10000
+                            readTimeout = 15000
+                            doInput = true
+                            useCaches = false
+                            instanceFollowRedirects = true
+                            setRequestProperty("Accept", "image/*")
+                            setRequestProperty("Cache-Control", "no-cache")
+                            setRequestProperty("Pragma", "no-cache")
+                        }
+                    try {
+                        if (connection.responseCode in 200..299) {
+                            val bitmap = connection.inputStream.use { input ->
+                                BitmapFactory.decodeStream(input)
+                            }
+                            if (bitmap != null) {
+                                return@withContext bitmap
+                            }
+                        }
+                    } finally {
+                        connection.disconnect()
+                    }
+                } catch (_: Exception) {
+                    // Try the next attempt/candidate without interrupting the UI.
+                }
+
+                if (attempt == 0) {
+                    delay(180L)
+                }
+            }
+        }
+
+        null
+    }
+
+    suspend fun fetchCatPhoto(photoUrl: String?): Bitmap? {
+        val cleaned = photoUrl?.trim()?.takeIf {
+            it.isNotBlank() && !it.equals("null", ignoreCase = true)
+        } ?: return null
+        return downloadBitmap(cleaned)
     }
     suspend fun uploadCatPhoto(
         catId: Int,
@@ -688,13 +814,25 @@ private object PurrFectApi {
     }
     private fun findPrimaryPhotoUrl(photos: org.json.JSONArray?): String? {
         if (photos == null || photos.length() == 0) return null
+
+        var firstValidPhotoUrl: String? = null
         for (index in 0 until photos.length()) {
             val photo = photos.optJSONObject(index) ?: continue
+            val candidate = photo.optString("photo_url", "").trim()
+            if (candidate.isBlank() || candidate.equals("null", ignoreCase = true)) continue
+
+            if (firstValidPhotoUrl == null) {
+                firstValidPhotoUrl = candidate
+            }
+
             if (photo.optBoolean("is_primary", false)) {
-                return photo.optString("photo_url", null)
+                return candidate
             }
         }
-        return photos.optJSONObject(0)?.optString("photo_url", null)
+
+        // The backend returns newest photos first when there is no explicit
+        // primary flag, so the first valid entry is the current photo.
+        return firstValidPhotoUrl
     }
     suspend fun forgotPassword(email: String): JSONObject {
         return postJson(
@@ -735,7 +873,10 @@ private object PurrFectApi {
             val response = getJson("/api/users/$userId/cat")
             val cat = response.optJSONObject("cat") ?: return null
             val photos = cat.optJSONArray("photos")
-            val photoUrl = findPrimaryPhotoUrl(photos)
+            val responsePhotoUrl = cat.optString("photo_url", "").trim().takeIf {
+                it.isNotBlank() && !it.equals("null", ignoreCase = true)
+            }
+            val photoUrl = responsePhotoUrl ?: findPrimaryPhotoUrl(photos)
             val photoBitmap = if (!photoUrl.isNullOrBlank()) {
                 downloadBitmap(photoUrl)
             } else {
@@ -787,12 +928,15 @@ private object PurrFectApi {
                 for (index in 0 until cats.length()) {
                     val cat = cats.optJSONObject(index) ?: continue
                     val photos = cat.optJSONArray("photos")
-                    val photoUrl = findPrimaryPhotoUrl(photos)
-                    val photoBitmap = if (!photoUrl.isNullOrBlank()) {
-                        downloadBitmap(photoUrl)
-                    } else {
-                        null
+                    val responsePhotoUrl = cat.optString("photo_url", "").trim().takeIf {
+                        it.isNotBlank() && !it.equals("null", ignoreCase = true)
                     }
+                    val photoUrl = responsePhotoUrl ?: findPrimaryPhotoUrl(photos)
+                    // IMPORTANT: never download Discover photos while building the
+                    // list. A slow/unreachable photo server must not keep the
+                    // entire Discover screen in its loading state. CatPhoto
+                    // fetches each image asynchronously after the card appears.
+                    val photoBitmap: Bitmap? = null
                     add(
                         CatProfile(
                             id = cat.optInt("id", 0),
@@ -837,7 +981,10 @@ private object PurrFectApi {
             val response = getJson("/api/cats/$catId")
             val cat = response.optJSONObject("cat") ?: return null
             val photos = cat.optJSONArray("photos")
-            val photoUrl = findPrimaryPhotoUrl(photos)
+            val responsePhotoUrl = cat.optString("photo_url", "").trim().takeIf {
+                it.isNotBlank() && !it.equals("null", ignoreCase = true)
+            }
+            val photoUrl = responsePhotoUrl ?: findPrimaryPhotoUrl(photos)
             val photoBitmap = if (!photoUrl.isNullOrBlank()) {
                 downloadBitmap(photoUrl)
             } else {
@@ -880,7 +1027,10 @@ private object PurrFectApi {
                 for (index in 0 until cats.length()) {
                     val cat = cats.optJSONObject(index) ?: continue
                     val photos = cat.optJSONArray("photos")
-                    val photoUrl = findPrimaryPhotoUrl(photos)
+                    val responsePhotoUrl = cat.optString("photo_url", "").trim().takeIf {
+                        it.isNotBlank() && !it.equals("null", ignoreCase = true)
+                    }
+                    val photoUrl = responsePhotoUrl ?: findPrimaryPhotoUrl(photos)
                     val photoBitmap = if (!photoUrl.isNullOrBlank()) {
                         downloadBitmap(photoUrl)
                     } else {
@@ -926,6 +1076,12 @@ private object PurrFectApi {
                     val matchedCatId = match.optInt("matched_cat_id", 0)
                     if (matchedCatId <= 0) continue
                     val matchedCat = getCatById(matchedCatId)
+                    val directPhotoUrl = match.optString("photo_url", "").trim().takeIf {
+                        it.isNotBlank() && !it.equals("null", ignoreCase = true)
+                    }
+                    val resolvedPhotoUrl = directPhotoUrl ?: matchedCat?.photoUrl
+                    val resolvedPhotoBitmap = matchedCat?.photoBitmap
+                        ?: resolvedPhotoUrl?.let { downloadBitmap(it) }
                     add(
                         MatchItem(
                             id = matchedCatId,
@@ -966,7 +1122,8 @@ private object PurrFectApi {
                             imageRes = R.drawable.signcat,
                             isNewMatch = match.optBoolean("is_new_match", false),
                             likedYou = match.optBoolean("liked_you", false),
-                            photoBitmap = matchedCat?.photoBitmap
+                            photoUrl = resolvedPhotoUrl,
+                            photoBitmap = resolvedPhotoBitmap
                         )
                     )
                 }
@@ -1178,18 +1335,10 @@ private object PurrFectApi {
             buildList {
                 for (i in 0 until array.length()) {
                     val item = array.optJSONObject(i) ?: continue
-                    var photoUrl: String? = item.optString("photo_url", "").takeIf { it.isNotBlank() }
                     val photos = item.optJSONArray("photos")
-                    if (photoUrl == null && photos != null && photos.length() > 0) {
-                        for (j in 0 until photos.length()) {
-                            val photo = photos.optJSONObject(j) ?: continue
-                            val candidate = photo.optString("photo_url", "")
-                            if (candidate.isNotBlank()) {
-                                photoUrl = candidate
-                                if (photo.optBoolean("is_primary", false)) break
-                            }
-                        }
-                    }
+                    val photoUrl = item.optString("photo_url", "").trim().takeIf {
+                        it.isNotBlank() && !it.equals("null", ignoreCase = true)
+                    } ?: findPrimaryPhotoUrl(photos)
                     val bitmap = photoUrl?.let { downloadBitmap(it) }
                     add(
                         CatProfile(
@@ -1484,6 +1633,10 @@ private fun showPurrFectSystemNotification(
 }
 
 class MainActivity : ComponentActivity() {
+    private companion object {
+        var revenueCatConfigured = false
+    }
+
     private val presenceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var presenceJob: kotlinx.coroutines.Job? = null
 
@@ -1492,6 +1645,18 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        if (!revenueCatConfigured) {
+            Purchases.logLevel = LogLevel.DEBUG
+            Purchases.configure(
+                PurchasesConfiguration.Builder(
+                    applicationContext,
+                    REVENUECAT_API_KEY
+                ).build()
+            )
+            revenueCatConfigured = true
+        }
+
         createPurrFectNotificationChannel(this)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) !=
@@ -1650,6 +1815,11 @@ data class MatchItem(
     val lastSeenLabel: String = "Last seen unavailable",
     val isNewMatch: Boolean = false,
     val likedYou: Boolean = false,
+    val personality: String = "Not added",
+    val activities: String = "Not added",
+    val health: String = "Not added",
+    val lookingFor: String = "Not added",
+    val photoUrl: String? = null,
     val photoBitmap: Bitmap? = null
 )
 /* =========================================================
@@ -1780,6 +1950,21 @@ fun PurrFectApp() {
                 .getBoolean(PREF_PRIVACY_ONLINE_STATUS, true)
         )
     }
+    var settingsSoundsEnabled by remember {
+        mutableStateOf(notificationPreferences(context).getBoolean(PREF_SOUNDS_MASTER, true))
+    }
+    var settingsSoundMatchEnabled by remember {
+        mutableStateOf(notificationPreferences(context).getBoolean(PREF_SOUND_MATCH, true))
+    }
+    var settingsSoundMessageEnabled by remember {
+        mutableStateOf(notificationPreferences(context).getBoolean(PREF_SOUND_MESSAGE, true))
+    }
+    var settingsSoundLikeEnabled by remember {
+        mutableStateOf(notificationPreferences(context).getBoolean(PREF_SOUND_LIKE, true))
+    }
+    var settingsSoundStarEnabled by remember {
+        mutableStateOf(notificationPreferences(context).getBoolean(PREF_SOUND_STAR, true))
+    }
 
     LaunchedEffect(catProfile.id) {
         if (catProfile.id > 0) {
@@ -1803,9 +1988,11 @@ fun PurrFectApp() {
         val matchObject = response.optJSONObject("match")
 
         if (matchObject != null) {
+            PurrFectSoundManager.playMatch(context)
             matchedPopupCat = PurrFectApi.getCatById(likedCatId)
             showMatchPopup = matchedPopupCat != null
         } else {
+            PurrFectSoundManager.play(context, PREF_SOUND_LIKE, ToneGenerator.TONE_PROP_BEEP)
             val message = response.optString("message")
             Toast.makeText(
                 context,
@@ -1989,9 +2176,16 @@ fun PurrFectApp() {
                                     gender = cat.gender,
                                     age = cat.age,
                                     breed = cat.breed,
-                                    distance = "Nearby",
+                                    distance = cat.distanceKm?.let {
+                                        if (it < 1.0) "Nearby" else String.format(Locale.US, "%.1f km away", it)
+                                    } ?: "Nearby",
                                     about = cat.about,
-                                    imageRes = matchItems.firstOrNull()?.imageRes ?: 0,
+                                    imageRes = matchItems.firstOrNull()?.imageRes ?: R.drawable.signcat,
+                                    personality = cat.personality,
+                                    activities = cat.activities,
+                                    health = cat.health,
+                                    lookingFor = cat.lookingFor,
+                                    photoUrl = cat.photoUrl,
                                     photoBitmap = cat.photoBitmap
                                 )
                                 currentPage = "catProfile"
@@ -2000,6 +2194,7 @@ fun PurrFectApp() {
                                 handleLikeConfirmed(likedCatId)
                             },
                             onStarCat = { starredCatId ->
+                                PurrFectSoundManager.play(context, PREF_SOUND_STAR, ToneGenerator.TONE_PROP_PROMPT)
                                 val response = PurrFectApi.starCat(
                                     catId = catProfile.id,
                                     starredCatId = starredCatId
@@ -2032,7 +2227,8 @@ fun PurrFectApp() {
                                     time = "Now",
                                     unread = 0,
                                     online = match.online,
-                                    lastSeenLabel = match.lastSeenLabel
+                                    lastSeenLabel = match.lastSeenLabel,
+                                    photoUrl = match.photoUrl
                                 )
                                 currentPage = "chat"
                             },
@@ -2082,9 +2278,16 @@ fun PurrFectApp() {
                                     gender = cat.gender,
                                     age = cat.age,
                                     breed = cat.breed,
-                                    distance = "Nearby",
+                                    distance = cat.distanceKm?.let {
+                                        if (it < 1.0) "Nearby" else String.format(Locale.US, "%.1f km away", it)
+                                    } ?: "Nearby",
                                     about = cat.about,
-                                    imageRes = matchItems.firstOrNull()?.imageRes ?: 0,
+                                    imageRes = matchItems.firstOrNull()?.imageRes ?: R.drawable.signcat,
+                                    personality = cat.personality,
+                                    activities = cat.activities,
+                                    health = cat.health,
+                                    lookingFor = cat.lookingFor,
+                                    photoUrl = cat.photoUrl,
                                     photoBitmap = cat.photoBitmap
                                 )
                                 currentPage = "catProfile"
@@ -2138,6 +2341,31 @@ fun PurrFectApp() {
                             val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
                             manager.cancelAll()
                         }
+                    },
+                    soundsEnabled = settingsSoundsEnabled,
+                    onSoundsEnabledChange = { enabled ->
+                        settingsSoundsEnabled = enabled
+                        notificationPreferences(context).edit().putBoolean(PREF_SOUNDS_MASTER, enabled).apply()
+                    },
+                    soundMatchEnabled = settingsSoundMatchEnabled,
+                    onSoundMatchEnabledChange = { enabled ->
+                        settingsSoundMatchEnabled = enabled
+                        notificationPreferences(context).edit().putBoolean(PREF_SOUND_MATCH, enabled).apply()
+                    },
+                    soundMessageEnabled = settingsSoundMessageEnabled,
+                    onSoundMessageEnabledChange = { enabled ->
+                        settingsSoundMessageEnabled = enabled
+                        notificationPreferences(context).edit().putBoolean(PREF_SOUND_MESSAGE, enabled).apply()
+                    },
+                    soundLikeEnabled = settingsSoundLikeEnabled,
+                    onSoundLikeEnabledChange = { enabled ->
+                        settingsSoundLikeEnabled = enabled
+                        notificationPreferences(context).edit().putBoolean(PREF_SOUND_LIKE, enabled).apply()
+                    },
+                    soundStarEnabled = settingsSoundStarEnabled,
+                    onSoundStarEnabledChange = { enabled ->
+                        settingsSoundStarEnabled = enabled
+                        notificationPreferences(context).edit().putBoolean(PREF_SOUND_STAR, enabled).apply()
                     },
                     darkModeEnabled = settingsDarkModeEnabled,
                     onDarkModeEnabledChange = { enabled ->
@@ -2302,6 +2530,7 @@ fun PurrFectApp() {
                             distance = "Nearby",
                             about = cat.about,
                             imageRes = R.drawable.signcat,
+                            photoUrl = cat.photoUrl,
                             photoBitmap = cat.photoBitmap
                         )
                         currentPage = "catProfile"
@@ -2343,6 +2572,8 @@ fun PurrFectApp() {
                 selectedMatch?.let { match ->
                     CompatibilityScreen(
                         match = match,
+                        currentCatPhotoUrl = catProfile.photoUrl,
+                        currentCatPhotoBitmap = catProfile.photoBitmap,
                         onBack = {
                             currentPage = "main"
                             selectedTab = 1
@@ -2386,10 +2617,11 @@ fun PurrFectApp() {
                                     )
                                 }
 
+                                var uploadedPhotoUrl: String? = null
                                 if (updatedProfile.photoBitmap != null &&
                                     updatedProfile.photoBitmap !== catProfile.photoBitmap
                                 ) {
-                                    PurrFectApi.uploadCatPhoto(
+                                    uploadedPhotoUrl = PurrFectApi.uploadCatPhoto(
                                         catId = savedProfile.id,
                                         bitmap = updatedProfile.photoBitmap
                                     )
@@ -2400,7 +2632,7 @@ fun PurrFectApp() {
 // could overwrite the values that were just saved. Preserve the
 // locally selected photo and adoption intent as well.
                                 catProfile = savedProfile.copy(
-                                    photoUrl = updatedProfile.photoUrl ?: savedProfile.photoUrl,
+                                    photoUrl = uploadedPhotoUrl ?: updatedProfile.photoUrl ?: savedProfile.photoUrl,
                                     photoBitmap = updatedProfile.photoBitmap ?: savedProfile.photoBitmap,
                                     adoptionIntent = updatedProfile.adoptionIntent
                                 )
@@ -2537,290 +2769,83 @@ fun PurrFectApp() {
 
     }
 
-    val sideMenuOffset = remember { Animatable(-1f) }
-    val sideMenuAlpha = remember { Animatable(0f) }
-
-    LaunchedEffect(isSideMenuOpen) {
-        if (isSideMenuOpen) {
-            launch {
-                sideMenuOffset.animateTo(
-                    targetValue = 0f,
-                    animationSpec = tween(360)
-                )
-            }
-            launch {
-                sideMenuAlpha.animateTo(
-                    targetValue = 1f,
-                    animationSpec = tween(280)
-                )
-            }
-        } else {
-            launch {
-                sideMenuOffset.animateTo(
-                    targetValue = -1f,
-                    animationSpec = tween(250)
-                )
-            }
-            launch {
-                sideMenuAlpha.animateTo(
-                    targetValue = 0f,
-                    animationSpec = tween(180)
-                )
-            }
-        }
-    }
-
     if (isSideMenuOpen) {
-        Row(
-            modifier = Modifier
-                .fillMaxSize()
-                .graphicsLayer {
-                    alpha = sideMenuAlpha.value
-                }
-                .background(Color.Black.copy(alpha = 0.25f))
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxHeight()
-                    .width(285.dp)
-                    .graphicsLayer {
-                        translationX = sideMenuOffset.value * 285.dp.toPx()
-                    }
-                    .background(BackgroundColor)
-                    .padding(top = 38.dp, start = 20.dp, end = 18.dp)
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "PurrFect",
-                        color = TextDark,
-                        fontSize = 24.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.weight(1f)
-                    )
-                    IconButton(onClick = { isSideMenuOpen = false }) {
-                        Icon(
-                            imageVector = Icons.Outlined.Close,
-                            contentDescription = "Close menu",
-                            tint = TextDark
-                        )
-                    }
-                }
-                Spacer(modifier = Modifier.height(28.dp))
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(17.dp))
-                        .background(CardColor)
-                        .border(1.dp, BorderColor, RoundedCornerShape(17.dp))
-                        .clickable {
-                            isSideMenuOpen = false
-                            currentPage = "starred"
-                        }
-                        .padding(horizontal = 15.dp, vertical = 16.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.StarBorder,
-                        contentDescription = null,
-                        tint = Purple,
-                        modifier = Modifier.size(26.dp)
-                    )
-                    Spacer(modifier = Modifier.width(14.dp))
-                    Text(
-                        text = "Starred Cats",
-                        color = TextDark,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.weight(1f)
-                    )
-                    if (starredCats.isNotEmpty()) {
-                        Text(
-                            text = starredCats.size.toString(),
-                            color = Pink,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(14.dp))
-
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(17.dp))
-                        .background(CardColor)
-                        .border(1.dp, BorderColor, RoundedCornerShape(17.dp))
-                        .clickable {
-                            isSideMenuOpen = false
-                            currentPage = "notifications"
-                        }
-                        .padding(horizontal = 15.dp, vertical = 16.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.Email,
-                        contentDescription = null,
-                        tint = Pink,
-                        modifier = Modifier.size(26.dp)
-                    )
-                    Spacer(modifier = Modifier.width(14.dp))
-                    Text(
-                        text = "Notifications",
-                        color = TextDark,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.weight(1f)
-                    )
-                    if (notificationUnreadCount > 0) {
-                        Text(
-                            text = notificationUnreadCount.toString(),
-                            color = Pink,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(14.dp))
-
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(17.dp))
-                        .background(CardColor)
-                        .border(1.dp, BorderColor, RoundedCornerShape(17.dp))
-                        .clickable {
-                            isSideMenuOpen = false
-                            currentPage = "adoption"
-                        }
-                        .padding(horizontal = 15.dp, vertical = 16.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.Pets,
-                        contentDescription = null,
-                        tint = purrFectColor(Color(0xFF4CAF50), Color(0xFF61E067)),
-                        modifier = Modifier.size(26.dp)
-                    )
-                    Spacer(modifier = Modifier.width(14.dp))
-                    Text(
-                        text = "Cat Adoption",
-                        color = TextDark,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-
-                Spacer(modifier = Modifier.weight(1f))
-
-                if (loggedInUser != null) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(17.dp))
-                            .background(CardColor)
-                            .border(1.dp, BorderColor, RoundedCornerShape(17.dp))
-                            .clickable {
-                                clearUserSession(context)
-                                loggedInUser = null
-                                catProfile = CatProfile(
-                                    id = 0,
-                                    name = "",
-                                    gender = "",
-                                    breed = "",
-                                    age = "",
-                                    about = "",
-                                    personality = "",
-                                    activities = "",
-                                    health = "",
-                                    lookingFor = ""
-                                )
-                                matchItems = emptyList()
-                                starredCats = emptyList()
-                                notificationItems = emptyList()
-                                notificationUnreadCount = 0
-                                selectedMatch = null
-                                selectedChat = null
-                                isSideMenuOpen = false
-                                currentPage = "welcome"
-                                selectedTab = 0
-                            }
-                            .padding(horizontal = 15.dp, vertical = 16.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            imageVector = Icons.Outlined.PersonOutline,
-                            contentDescription = null,
-                            tint = Pink,
-                            modifier = Modifier.size(26.dp)
-                        )
-                        Spacer(modifier = Modifier.width(14.dp))
-                        Text(
-                            text = "Sign Out",
-                            color = TextDark,
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-                } else {
-                    Column(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        Button(
-                            onClick = {
-                                isSideMenuOpen = false
-                                currentPage = "signup"
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = Pink
-                            ),
-                            shape = RoundedCornerShape(17.dp)
-                        ) {
-                            Text(
-                                text = "Sign Up",
-                                color = Color.White,
-                                fontSize = 16.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-
-                        Button(
-                            onClick = {
-                                isSideMenuOpen = false
-                                currentPage = "login"
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = purrFectColor(Color(0xFF4CAF50), Color(0xFF61E067))
-                            ),
-                            shape = RoundedCornerShape(17.dp)
-                        ) {
-                            Text(
-                                text = "Sign In",
-                                color = Color.White,
-                                fontSize = 16.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(20.dp))
+        DiscoverSidePanel(
+            profile = catProfile,
+            loggedIn = loggedInUser != null,
+            unreadNotifications = notificationUnreadCount,
+            starredCount = starredCats.size,
+            onClose = { isSideMenuOpen = false },
+            onViewProfile = {
+                isSideMenuOpen = false
+                selectedTab = 3
+                currentPage = "main"
+            },
+            onAccount = {
+                isSideMenuOpen = false
+                currentPage = "accountSecurity"
+            },
+            onPrivacy = {
+                isSideMenuOpen = false
+                currentPage = "privacy"
+            },
+            onNotifications = {
+                isSideMenuOpen = false
+                currentPage = "notificationSettings"
+            },
+            onHelpSupport = {
+                isSideMenuOpen = false
+                currentPage = "helpSupport"
+            },
+            onAbout = {
+                isSideMenuOpen = false
+                currentPage = "about"
+            },
+            onStarred = {
+                isSideMenuOpen = false
+                currentPage = "starred"
+            },
+            onAdoption = {
+                isSideMenuOpen = false
+                currentPage = "adoption"
+            },
+            onTerms = {
+                isSideMenuOpen = false
+                currentPage = "about"
+            },
+            onPremium = {
+                Toast.makeText(
+                    context,
+                    "PurrFect Premium will be available soon",
+                    Toast.LENGTH_SHORT
+                ).show()
+            },
+            onLogout = {
+                isSideMenuOpen = false
+                clearUserSession(context)
+                loggedInUser = null
+                catProfile = CatProfile(
+                    id = 0,
+                    name = "",
+                    gender = "",
+                    breed = "",
+                    age = "",
+                    about = "",
+                    personality = "",
+                    activities = "",
+                    health = "",
+                    lookingFor = ""
+                )
+                matchItems = emptyList()
+                starredCats = emptyList()
+                notificationItems = emptyList()
+                notificationUnreadCount = 0
+                selectedMatch = null
+                selectedChat = null
+                currentPage = "welcome"
+                selectedTab = 0
             }
-            Spacer(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .clickable { isSideMenuOpen = false }
-            )
-        }
+        )
     }
 
     if (showMatchPopup && matchedPopupCat != null) {
@@ -2847,21 +2872,20 @@ fun PurrFectApp() {
                             .size(110.dp)
                             .clip(CircleShape)
                     ) {
-                        if (matchedCat.photoBitmap != null) {
-                            Image(
-                                bitmap = matchedCat.photoBitmap!!.asImageBitmap(),
-                                contentDescription = matchedCat.name,
-                                modifier = Modifier.fillMaxSize(),
-                                contentScale = ContentScale.Crop
-                            )
-                        } else {
-                            Image(
-                                painter = painterResource(id = R.drawable.signcat),
-                                contentDescription = matchedCat.name,
-                                modifier = Modifier.fillMaxSize(),
-                                contentScale = ContentScale.Crop
-                            )
-                        }
+                        CatPhoto(
+                            photoUrl = matchedCat.photoUrl,
+                            initialBitmap = matchedCat.photoBitmap,
+                            contentDescription = matchedCat.name,
+                            modifier = Modifier.fillMaxSize(),
+                            fallback = {
+                                Image(
+                                    painter = painterResource(id = R.drawable.signcat),
+                                    contentDescription = matchedCat.name,
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentScale = ContentScale.Crop
+                                )
+                            }
+                        )
                     }
                     Spacer(modifier = Modifier.height(12.dp))
                     Text(
@@ -2903,6 +2927,377 @@ fun PurrFectApp() {
         )
     }
 }
+/* =========================================================
+DISCOVER SIDE PANEL
+========================================================= */
+@Composable
+private fun DiscoverSidePanel(
+    profile: CatProfile,
+    loggedIn: Boolean,
+    unreadNotifications: Int,
+    starredCount: Int,
+    onClose: () -> Unit,
+    onViewProfile: () -> Unit,
+    onAccount: () -> Unit,
+    onPrivacy: () -> Unit,
+    onNotifications: () -> Unit,
+    onHelpSupport: () -> Unit,
+    onAbout: () -> Unit,
+    onStarred: () -> Unit,
+    onAdoption: () -> Unit,
+    onTerms: () -> Unit,
+    onPremium: () -> Unit,
+    onLogout: () -> Unit
+) {
+    val panelWidth = 322.dp
+    val panelWidthPx = with(LocalDensity.current) { panelWidth.roundToPx() }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.38f))
+    ) {
+        // The drawer is anchored to the same LEFT edge as Discover's
+        // three-line menu button.
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .clickable(onClick = onClose)
+        )
+
+        AnimatedVisibility(
+            visible = true,
+            modifier = Modifier.align(Alignment.CenterStart),
+            enter = slideInHorizontally(
+                initialOffsetX = { -panelWidthPx },
+                animationSpec = tween(320)
+            ) + fadeIn(animationSpec = tween(220)),
+            exit = slideOutHorizontally(
+                targetOffsetX = { -panelWidthPx },
+                animationSpec = tween(250)
+            ) + fadeOut(animationSpec = tween(180))
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .width(panelWidth)
+                    .clip(RoundedCornerShape(topEnd = 30.dp, bottomEnd = 30.dp))
+                    .background(BackgroundColor)
+                    .verticalScroll(rememberScrollState())
+                    .padding(top = 26.dp, start = 18.dp, end = 18.dp, bottom = 18.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "PurrFect",
+                        color = TextDark,
+                        fontSize = 25.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.weight(1f)
+                    )
+                    IconButton(onClick = onClose) {
+                        Icon(
+                            imageVector = Icons.Outlined.Close,
+                            contentDescription = "Close menu",
+                            tint = TextDark
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(21.dp))
+                        .background(CardColor)
+                        .border(1.dp, BorderColor, RoundedCornerShape(21.dp))
+                        .clickable(onClick = onViewProfile)
+                        .padding(horizontal = 14.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(60.dp)
+                            .clip(CircleShape)
+                            .border(2.dp, Pink, CircleShape)
+                    ) {
+                        CatPhoto(
+                            photoUrl = profile.photoUrl,
+                            initialBitmap = profile.photoBitmap,
+                            contentDescription = profile.name.ifBlank { "My Cat" },
+                            modifier = Modifier.fillMaxSize(),
+                            fallback = {
+                                Image(
+                                    painter = painterResource(id = R.drawable.signcat),
+                                    contentDescription = "My Cat",
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentScale = ContentScale.Crop
+                                )
+                            }
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = profile.name.ifBlank { "My Cat" },
+                            color = TextDark,
+                            fontSize = 17.sp,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = listOfNotNull(
+                                profile.breed.takeIf { it.isNotBlank() },
+                                profile.age.takeIf { it.isNotBlank() }?.let { "$it years" }
+                            ).joinToString(" • ").ifBlank { "Cat profile" },
+                            color = TextGrey,
+                            fontSize = 12.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Spacer(modifier = Modifier.height(5.dp))
+                        Text(
+                            text = "View Profile",
+                            color = Pink,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    Icon(
+                        imageVector = Icons.Outlined.ChevronRight,
+                        contentDescription = null,
+                        tint = TextGrey,
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(21.dp))
+                        .background(
+                            purrFectColor(Color(0xFFFFE7ED), Color(0xFF24162A))
+                        )
+                        .border(
+                            1.dp,
+                            purrFectColor(Color(0xFFFFC9D5), Color(0xFF5D304A)),
+                            RoundedCornerShape(21.dp)
+                        )
+                        .clickable(onClick = onPremium)
+                        .padding(horizontal = 14.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(46.dp)
+                            .clip(RoundedCornerShape(15.dp))
+                            .background(Pink),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Star,
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "PurrFect Premium",
+                            color = TextDark,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = "Unlock more features",
+                            color = TextGrey,
+                            fontSize = 11.sp
+                        )
+                    }
+                    Text(
+                        text = "Go Premium",
+                        color = Pink,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(20.dp))
+
+                Text("ACCOUNT", color = TextGrey, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
+                Spacer(modifier = Modifier.height(7.dp))
+                DiscoverPanelRow(Icons.Outlined.PersonOutline, "Account", "Account & security", onAccount)
+                DiscoverPanelRow(Icons.Outlined.Shield, "Privacy", "Privacy controls", onPrivacy)
+                DiscoverPanelRow(Icons.Outlined.Notifications, "Notifications", "Manage your notifications", onNotifications, unreadNotifications)
+
+                Spacer(modifier = Modifier.height(15.dp))
+                Text("SUPPORT", color = TextGrey, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
+                Spacer(modifier = Modifier.height(7.dp))
+                DiscoverPanelRow(Icons.Outlined.HelpOutline, "Help & Support", "Get help with PurrFect", onHelpSupport)
+                DiscoverPanelRow(Icons.Outlined.Info, "About PurrFect", "Learn more about the app", onAbout)
+
+                Spacer(modifier = Modifier.height(15.dp))
+                Text("DISCOVER", color = TextGrey, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
+                Spacer(modifier = Modifier.height(7.dp))
+                DiscoverPanelRow(Icons.Outlined.StarBorder, "Starred Cats", "Your saved cats", onStarred, starredCount)
+                DiscoverPanelRow(Icons.Outlined.Pets, "Cat Adoption", "Cats looking for a home", onAdoption)
+
+                Spacer(modifier = Modifier.height(15.dp))
+                Text("LEGAL", color = TextGrey, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
+                Spacer(modifier = Modifier.height(7.dp))
+                DiscoverPanelRow(Icons.Outlined.Description, "Terms & Conditions", "App usage terms", onTerms)
+                DiscoverPanelRow(Icons.Outlined.Shield, "Privacy Policy", "How app data is handled", onPrivacy)
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                if (loggedIn) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(18.dp))
+                            .background(CardColor)
+                            .border(1.dp, BorderColor, RoundedCornerShape(18.dp))
+                            .clickable(onClick = onLogout)
+                            .padding(horizontal = 14.dp, vertical = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(44.dp)
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(
+                                    purrFectColor(Color(0xFFFFE8ED), Color(0xFF211E35))
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.Logout,
+                                contentDescription = null,
+                                tint = Pink,
+                                modifier = Modifier.size(23.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text(
+                            text = "Log Out",
+                            color = TextDark,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                } else {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Button(
+                            onClick = onAccount,
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.buttonColors(containerColor = Pink),
+                            shape = RoundedCornerShape(17.dp)
+                        ) {
+                            Text("Sign In / Sign Up", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(18.dp))
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(1.dp)
+                        .background(BorderColor)
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = "PurrFect • v1.0",
+                    color = TextGrey,
+                    fontSize = 11.sp,
+                    modifier = Modifier.align(Alignment.CenterHorizontally)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun DiscoverPanelRow(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit,
+    badge: Int = 0
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(42.dp)
+                .clip(RoundedCornerShape(13.dp))
+                .background(
+                    purrFectColor(Color(0xFFFFE8ED), Color(0xFF211E35))
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = Pink,
+                modifier = Modifier.size(21.dp)
+            )
+        }
+        Spacer(modifier = Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                color = TextDark,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = subtitle,
+                color = TextGrey,
+                fontSize = 11.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        if (badge > 0) {
+            Text(
+                text = badge.toString(),
+                color = Pink,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(end = 4.dp)
+            )
+        }
+        Icon(
+            imageVector = Icons.Outlined.ChevronRight,
+            contentDescription = null,
+            tint = TextGrey,
+            modifier = Modifier.size(18.dp)
+        )
+    }
+}
+
 /* =========================================================
 STARRED CATS SCREEN
 ========================================================= */
@@ -3026,28 +3421,27 @@ fun StarredCatsScreen(
                                 }
                                 .clip(RoundedCornerShape(16.dp))
                         ) {
-                            if (cat.photoBitmap != null) {
-                                Image(
-                                    bitmap = cat.photoBitmap.asImageBitmap(),
-                                    contentDescription = "${cat.name} photo",
-                                    modifier = Modifier.fillMaxSize(),
-                                    contentScale = ContentScale.Crop
-                                )
-                            } else {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxSize()
-                                        .background(purrFectColor(Color(0xFFFFF1E7), Color(0xFF211E35))),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Outlined.Pets,
-                                        contentDescription = null,
-                                        tint = Pink,
-                                        modifier = Modifier.size(34.dp)
-                                    )
+                            CatPhoto(
+                                photoUrl = cat.photoUrl,
+                                initialBitmap = cat.photoBitmap,
+                                contentDescription = "${cat.name} photo",
+                                modifier = Modifier.fillMaxSize(),
+                                fallback = {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .background(purrFectColor(Color(0xFFFFF1E7), Color(0xFF211E35))),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Outlined.Pets,
+                                            contentDescription = null,
+                                            tint = Pink,
+                                            modifier = Modifier.size(34.dp)
+                                        )
+                                    }
                                 }
-                            }
+                            )
                         }
                         Spacer(modifier = Modifier.width(13.dp))
                         Column(modifier = Modifier.weight(1f)) {
@@ -4970,9 +5364,32 @@ fun DiscoverScreen(
     // Filter states
     var selectedGender by remember { mutableStateOf<String?>(null) }
     var selectedAgeRange by remember { mutableStateOf<String?>(null) }
+    var selectedBreed by remember { mutableStateOf<String?>(null) }
+    var selectedMaxDistanceKm by remember { mutableStateOf<Double?>(null) }
     var sortByNearby by remember { mutableStateOf(false) }
 
-    val filteredCats = remember(discoverCats, searchQuery, selectedGender, selectedAgeRange, sortByNearby) {
+    // Discover filter uses a fixed list of real cat breeds. This prevents
+    // invalid values accidentally stored in a profile (for example "Gay")
+    // from appearing as a breed option.
+    val availableBreeds = remember {
+        listOf(
+            "Persian",
+            "Maine Coon",
+            "Siamese",
+            "British Shorthair",
+            "Ragdoll"
+        )
+    }
+
+    val filteredCats = remember(
+        discoverCats,
+        searchQuery,
+        selectedGender,
+        selectedAgeRange,
+        selectedBreed,
+        selectedMaxDistanceKm,
+        sortByNearby
+    ) {
         val query = searchQuery.trim()
         var list = if (query.isBlank()) {
             discoverCats
@@ -4986,26 +5403,57 @@ fun DiscoverScreen(
         }
 
         // Apply Gender Filter
-        if (selectedGender != null) {
-            list = list.filter { it.gender.equals(selectedGender, ignoreCase = true) }
+        // Only Male/Female are available in Discover. There is no other
+        // gender option in this filter.
+        if (!selectedGender.isNullOrBlank()) {
+            list = list.filter { cat ->
+                cat.gender.trim().equals(selectedGender, ignoreCase = true)
+            }
         }
 
-        // Apply Age Filter
-        if (selectedAgeRange != null) {
+        // Apply Age Filter safely. Cat age may arrive as "3", "3 years",
+        // "3 Years Old", etc. Missing/invalid ages simply do not match an
+        // active age filter instead of causing any conversion exception.
+        selectedAgeRange?.let { range ->
             list = list.filter { cat ->
-                val ageInt = cat.age.toIntOrNull() ?: 0
-                when (selectedAgeRange) {
-                    "Kitten" -> ageInt < 1
-                    "Adult" -> ageInt in 1..7
-                    "Senior" -> ageInt > 7
+                val ageText = cat.age.trim()
+                val ageNumber = ageText
+                    .substringBefore(" ")
+                    .toDoubleOrNull()
+                    ?: Regex("[0-9]+(?:\\.[0-9]+)?")
+                        .find(ageText)
+                        ?.value
+                        ?.toDoubleOrNull()
+
+                when (range) {
+                    "Kitten" -> ageNumber != null && ageNumber < 1.0
+                    "Adult" -> ageNumber != null && ageNumber >= 1.0 && ageNumber <= 7.0
+                    "Senior" -> ageNumber != null && ageNumber > 7.0
                     else -> true
                 }
             }
         }
 
+        // Apply Breed Filter
+        if (!selectedBreed.isNullOrBlank()) {
+            list = list.filter {
+                it.breed.equals(selectedBreed, ignoreCase = true)
+            }
+        }
+
+        // Apply Maximum Distance Filter
+        if (selectedMaxDistanceKm != null) {
+            list = list.filter { cat ->
+                cat.distanceKm != null && cat.distanceKm <= selectedMaxDistanceKm!!
+            }
+        }
+
         // Apply Nearby Sort
         if (sortByNearby) {
-            list = list.sortedBy { it.distanceKm ?: Double.MAX_VALUE }
+            list = list.sortedWith(
+                compareBy<CatProfile> { it.distanceKm == null }
+                    .thenBy { it.distanceKm ?: Double.MAX_VALUE }
+            )
         }
 
         list
@@ -5019,6 +5467,8 @@ fun DiscoverScreen(
         showDiscoverFilters = false
         selectedGender = null
         selectedAgeRange = null
+        selectedBreed = null
+        selectedMaxDistanceKm = null
         sortByNearby = false
         isLoading = true
         loadError = null
@@ -5050,7 +5500,7 @@ fun DiscoverScreen(
         }
     }
 
-    LaunchedEffect(searchQuery) {
+    LaunchedEffect(searchQuery, selectedGender, selectedAgeRange, selectedBreed, selectedMaxDistanceKm, sortByNearby) {
         currentCat = 0
         buttonAction = 0
         starSelected = false
@@ -5232,6 +5682,19 @@ fun DiscoverScreen(
                             onClick = { sortByNearby = !sortByNearby }
                         )
                         DiscoverFilterChip(
+                            label = if (selectedGender == null) "Gender" else selectedGender!!,
+                            icon = "⚥",
+                            selected = selectedGender != null,
+                            onClick = {
+                                selectedGender = when (selectedGender) {
+                                    null -> "Male"
+                                    "Male" -> "Female"
+                                    "Female" -> null
+                                    else -> null
+                                }
+                            }
+                        )
+                        DiscoverFilterChip(
                             label = if (selectedAgeRange == null) "Age" else selectedAgeRange!!,
                             icon = "▣",
                             selected = selectedAgeRange != null,
@@ -5245,31 +5708,46 @@ fun DiscoverScreen(
                             }
                         )
                         DiscoverFilterChip(
-                            label = "Breed",
+                            label = if (selectedBreed == null) "Breed" else selectedBreed!!,
                             icon = "🐱",
-                            selected = false,
+                            selected = selectedBreed != null,
                             onClick = {
-                                // For now, maybe just focus search or show a toast
-                                Toast.makeText(discoverContext, "Use search to filter by breed", Toast.LENGTH_SHORT).show()
-                            }
-                        )
-                        DiscoverFilterChip(
-                            label = if (selectedGender == null) "Gender" else selectedGender!!,
-                            icon = "⚥",
-                            selected = selectedGender != null,
-                            onClick = {
-                                selectedGender = when (selectedGender) {
-                                    null -> "Male"
-                                    "Male" -> "Female"
-                                    else -> null
+                                selectedBreed = when {
+                                    availableBreeds.isEmpty() -> null
+                                    selectedBreed == null -> availableBreeds.first()
+                                    else -> {
+                                        val currentIndex = availableBreeds.indexOfFirst {
+                                            it.equals(selectedBreed, ignoreCase = true)
+                                        }
+                                        if (currentIndex == -1 || currentIndex == availableBreeds.lastIndex) {
+                                            null
+                                        } else {
+                                            availableBreeds[currentIndex + 1]
+                                        }
+                                    }
                                 }
                             }
                         )
                         DiscoverFilterChip(
-                            label = "More",
-                            icon = "•••",
-                            selected = false,
-                            onClick = { }
+                            label = when (selectedMaxDistanceKm) {
+                                null -> "Distance"
+                                5.0 -> "≤ 5 km"
+                                10.0 -> "≤ 10 km"
+                                25.0 -> "≤ 25 km"
+                                50.0 -> "≤ 50 km"
+                                else -> "Distance"
+                            },
+                            icon = "⌖",
+                            selected = selectedMaxDistanceKm != null,
+                            onClick = {
+                                selectedMaxDistanceKm = when (selectedMaxDistanceKm) {
+                                    null -> 5.0
+                                    5.0 -> 10.0
+                                    10.0 -> 25.0
+                                    25.0 -> 50.0
+                                    else -> null
+                                }
+                            }
                         )
                     }
                 }
@@ -5280,8 +5758,9 @@ fun DiscoverScreen(
             targetState = when {
                 isLoading -> "loading"
                 loadError != null -> "error"
-                discoverCats.isNotEmpty() && filteredCats.isEmpty() -> "search_empty"
                 discoverCats.isEmpty() -> "empty"
+                filteredCats.isEmpty() -> "search_empty"
+                currentCat >= filteredCats.size -> "all_seen"
                 else -> "content"
             },
             transitionSpec = {
@@ -5395,113 +5874,143 @@ fun DiscoverScreen(
                         }
                     }
                 }
+                "all_seen" -> {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            Text(text = "🐾", fontSize = 52.sp)
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Text(
+                                text = "No more cats in this filter",
+                                color = TextDark,
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Spacer(modifier = Modifier.height(5.dp))
+                            Text(
+                                text = "Change or clear the filters to discover more.",
+                                color = TextGrey,
+                                fontSize = 13.sp,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.padding(horizontal = 28.dp)
+                            )
+                        }
+                    }
+                }
                 else -> {
-                    val safeIndex = currentCat.coerceIn(0, filteredCats.lastIndex)
-                    SwipeCard(
-                        cat = filteredCats[safeIndex],
-                        catNumber = safeIndex,
-                        buttonAction = buttonAction,
-                        onCatClick = {
-                            onCatClick(filteredCats[safeIndex])
-                        },
-                        onSwipeComplete = {
-                            currentCat++
-                            buttonAction = 0
-                            starSelected = false
-                        },
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(horizontal = 17.dp, vertical = 2.dp)
-                            .graphicsLayer {
-                                alpha = discoverCardEntrance.value
-                                val entranceScale =
-                                    0.965f + (0.035f * discoverCardEntrance.value)
-                                scaleX = entranceScale
-                                scaleY = entranceScale
-                                translationY =
-                                    (1f - discoverCardEntrance.value) * 18.dp.toPx()
-                            }
-                    )
+                    // This branch is only reached when filteredCats is guaranteed non-empty.
+                    // Do not use coerceIn() with lastIndex here: lastIndex can be -1 for an empty list.
+                    val safeIndex = currentCat.coerceAtLeast(0)
+                    if (safeIndex < filteredCats.size) {
+                        SwipeCard(
+                            cat = filteredCats[safeIndex],
+                            catNumber = safeIndex,
+                            buttonAction = buttonAction,
+                            onCatClick = {
+                                onCatClick(filteredCats[safeIndex])
+                            },
+                            onSwipeComplete = {
+                                currentCat++
+                                buttonAction = 0
+                                starSelected = false
+                            },
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(horizontal = 17.dp, vertical = 2.dp)
+                                .graphicsLayer {
+                                    alpha = discoverCardEntrance.value
+                                    val entranceScale =
+                                        0.965f + (0.035f * discoverCardEntrance.value)
+                                    scaleX = entranceScale
+                                    scaleY = entranceScale
+                                    translationY =
+                                        (1f - discoverCardEntrance.value) * 18.dp.toPx()
+                                }
+                        )
+                    }
                 }
             }
         }
 
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(
-                    horizontal = 16.dp,
-                    vertical = 8.dp
+        if (filteredCats.isNotEmpty() && currentCat >= 0 && currentCat < filteredCats.size) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(
+                        horizontal = 16.dp,
+                        vertical = 8.dp
+                    )
+                    .graphicsLayer {
+                        alpha = discoverActionsEntrance.value
+                        translationY =
+                            (1f - discoverActionsEntrance.value) * 10.dp.toPx()
+                    },
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                ActionButton(
+                    icon = Icons.Outlined.Close,
+                    iconColor = Pink,
+                    size = 53.dp,
+                    onClick = { buttonAction = 1 }
                 )
-                .graphicsLayer {
-                    alpha = discoverActionsEntrance.value
-                    translationY =
-                        (1f - discoverActionsEntrance.value) * 10.dp.toPx()
-                },
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            ActionButton(
-                icon = Icons.Outlined.Close,
-                iconColor = Pink,
-                size = 53.dp,
-                onClick = { buttonAction = 1 }
-            )
-            StarActionButton(
-                selected = starSelected,
-                onClick = {
-                    val starredCatId = filteredCats.getOrNull(
-                        currentCat.coerceIn(0, filteredCats.lastIndex)
-                    )?.id ?: 0
-                    if (!starSending && starredCatId > 0) {
-                        starSending = true
-                        discoverLikeScope.launch {
-                            try {
-                                onStarCat(starredCatId)
-                                starSelected = true
-                                buttonAction = 3
-                            } catch (error: Exception) {
-                                Toast.makeText(
-                                    discoverContext,
-                                    "Star failed: ${error.message}",
-                                    Toast.LENGTH_LONG
-                                ).show()
-                            } finally {
-                                starSending = false
+                StarActionButton(
+                    selected = starSelected,
+                    onClick = {
+                        val starredCatId = filteredCats.getOrNull(currentCat)?.id ?: 0
+                        if (!starSending && starredCatId > 0) {
+                            starSending = true
+                            discoverLikeScope.launch {
+                                try {
+                                    onStarCat(starredCatId)
+                                    starSelected = true
+                                    buttonAction = 3
+                                } catch (error: Exception) {
+                                    Toast.makeText(
+                                        discoverContext,
+                                        "Star failed: ${error.message}",
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                } finally {
+                                    starSending = false
+                                }
                             }
                         }
                     }
-                }
-            )
-            HeartBurstButton(
-                trigger = likeAnimationTrigger,
-                onClick = {
-                    val likedCatId =
-                        filteredCats.getOrNull(
-                            currentCat.coerceIn(0, filteredCats.lastIndex)
-                        )?.id ?: 0
+                )
+                HeartBurstButton(
+                    trigger = likeAnimationTrigger,
+                    onClick = {
+                        val likedCatId =
+                            filteredCats.getOrNull(currentCat)?.id ?: 0
 
-                    if (!likeSending && likedCatId > 0) {
-                        likeSending = true
-                        discoverLikeScope.launch {
-                            try {
-                                onLikeConfirmed(likedCatId)
-                                buttonAction = 2
-                                likeAnimationTrigger++
-                            } catch (error: Exception) {
-                                Toast.makeText(
-                                    discoverContext,
-                                    "Like failed: ${error.message}",
-                                    Toast.LENGTH_LONG
-                                ).show()
-                            } finally {
-                                likeSending = false
+                        if (!likeSending && likedCatId > 0) {
+                            likeSending = true
+                            discoverLikeScope.launch {
+                                try {
+                                    onLikeConfirmed(likedCatId)
+                                    buttonAction = 2
+                                    likeAnimationTrigger++
+                                } catch (error: Exception) {
+                                    Toast.makeText(
+                                        discoverContext,
+                                        "Like failed: ${error.message}",
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                } finally {
+                                    likeSending = false
+                                }
                             }
                         }
                     }
-                }
-            )
-            ShareButton()
+                )
+                ShareButton()
+            }
         }
 
         BottomNavigation(
@@ -5764,6 +6273,48 @@ fun HeartParticle(
     )
 }
 /* =========================================================
+CAT PHOTO LOADER
+Fetches a saved remote photo when a screen receives only photoUrl,
+and retries transient image loading failures without changing the UI.
+========================================================= */
+@Composable
+private fun CatPhoto(
+    photoUrl: String?,
+    initialBitmap: Bitmap?,
+    contentDescription: String?,
+    modifier: Modifier = Modifier,
+    contentScale: ContentScale = ContentScale.Crop,
+    fallback: @Composable () -> Unit
+) {
+    var resolvedBitmap by remember(photoUrl, initialBitmap) {
+        mutableStateOf(initialBitmap)
+    }
+
+    LaunchedEffect(photoUrl, initialBitmap) {
+        resolvedBitmap = initialBitmap
+        if (resolvedBitmap == null) {
+            resolvedBitmap = PurrFectApi.fetchCatPhoto(photoUrl)
+        }
+    }
+
+    if (resolvedBitmap != null) {
+        Image(
+            bitmap = resolvedBitmap!!.asImageBitmap(),
+            contentDescription = contentDescription,
+            modifier = modifier,
+            contentScale = contentScale
+        )
+    } else {
+        Box(
+            modifier = modifier,
+            contentAlignment = Alignment.Center
+        ) {
+            fallback()
+        }
+    }
+}
+
+/* =========================================================
 SWIPE CARD
 STEP 14 — GESTURE INTERACTION POLISH
 ========================================================= */
@@ -5935,26 +6486,25 @@ fun SwipeCard(
                     .background(purrFectColor(Color(0xFFE4D4C8), Color(0xFF302A46))),
                 contentAlignment = Alignment.Center
             ) {
-                if (cat.photoBitmap != null) {
-                    Image(
-                        bitmap = cat.photoBitmap.asImageBitmap(),
-                        contentDescription = "${cat.name} cat photo",
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop
-                    )
-                } else {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Text(text = "🐱", fontSize = 86.sp)
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = cat.name,
-                            color = TextGrey,
-                            fontSize = 14.sp
-                        )
+                CatPhoto(
+                    photoUrl = cat.photoUrl,
+                    initialBitmap = cat.photoBitmap,
+                    contentDescription = "${cat.name} cat photo",
+                    modifier = Modifier.fillMaxSize(),
+                    fallback = {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(text = "🐱", fontSize = 86.sp)
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = cat.name,
+                                color = TextGrey,
+                                fontSize = 14.sp
+                            )
+                        }
                     }
-                }
+                )
             }
             if (superLike) {
                 Box(
@@ -6459,17 +7009,19 @@ fun LikedYouCard(
                     purrFectColor(Color(0xFFEDE4E0), Color(0xFF211E35))
                 )
         ) {
-            Image(
-                painter =
-                    painterResource(
-                        id = user.imageRes
-                    ),
-                contentDescription =
-                    "${user.name} cat photo",
-                modifier =
-                    Modifier.fillMaxSize(),
-                contentScale =
-                    ContentScale.Crop
+            CatPhoto(
+                photoUrl = user.photoUrl,
+                initialBitmap = user.photoBitmap,
+                contentDescription = "${user.name} cat photo",
+                modifier = Modifier.fillMaxSize(),
+                fallback = {
+                    Image(
+                        painter = painterResource(id = user.imageRes),
+                        contentDescription = "${user.name} cat photo",
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop
+                    )
+                }
             )
             if (user.online) {
                 Box(
@@ -6658,17 +7210,19 @@ CAT PHOTO
                     purrFectColor(Color(0xFFEDE4E0), Color(0xFF211E35))
                 )
         ) {
-            Image(
-                painter =
-                    painterResource(
-                        id = match.imageRes
-                    ),
-                contentDescription =
-                    "${match.name} cat photo",
-                modifier =
-                    Modifier.fillMaxSize(),
-                contentScale =
-                    ContentScale.Crop
+            CatPhoto(
+                photoUrl = match.photoUrl,
+                initialBitmap = match.photoBitmap,
+                contentDescription = "${match.name} cat photo",
+                modifier = Modifier.fillMaxSize(),
+                fallback = {
+                    Image(
+                        painter = painterResource(id = match.imageRes),
+                        contentDescription = "${match.name} cat photo",
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop
+                    )
+                }
             )
             if (match.online) {
                 Box(
@@ -6981,21 +7535,20 @@ fun CatProfileScreen(
                             scaleY = scale
                         }
                 ) {
-                    if (match.photoBitmap != null) {
-                        Image(
-                            bitmap = match.photoBitmap.asImageBitmap(),
-                            contentDescription = "${match.name} cat photo",
-                            modifier = Modifier.fillMaxSize(),
-                            contentScale = ContentScale.Crop
-                        )
-                    } else {
-                        Image(
-                            painter = painterResource(id = match.imageRes),
-                            contentDescription = "${match.name} cat photo",
-                            modifier = Modifier.fillMaxSize(),
-                            contentScale = ContentScale.Crop
-                        )
-                    }
+                    CatPhoto(
+                        photoUrl = match.photoUrl,
+                        initialBitmap = match.photoBitmap,
+                        contentDescription = "${match.name} cat photo",
+                        modifier = Modifier.fillMaxSize(),
+                        fallback = {
+                            Image(
+                                painter = painterResource(id = match.imageRes),
+                                contentDescription = "${match.name} cat photo",
+                                modifier = Modifier.fillMaxSize(),
+                                contentScale = ContentScale.Crop
+                            )
+                        }
+                    )
                     Box(
                         modifier = Modifier
                             .align(Alignment.TopEnd)
@@ -7148,82 +7701,68 @@ fun CatProfileScreen(
                     modifier =
                         Modifier.height(10.dp)
                 )
-                Row(
-                    modifier = Modifier.graphicsLayer {
-                        alpha = profileContentEntrance.value
-                        translationY = (1f - profileContentEntrance.value) * 16.dp.toPx()
-                    },
-                    horizontalArrangement =
-                        Arrangement.spacedBy(7.dp)
-                ) {
-                    ProfileTag("Calm")
-                    ProfileTag("Affectionate")
-                    ProfileTag("Friendly")
-                }
-                Spacer(
-                    modifier =
-                        Modifier.height(7.dp)
-                )
-                ProfileTag("Independent")
-                Spacer(
-                    modifier =
-                        Modifier.height(15.dp)
-                )
-            }
-            item {
-                ProfileDivider()
-                Text(
-                    text =
-                        "Favorite Activities",
-                    color =
-                        TextDark,
-                    fontSize =
-                        16.sp,
-                    fontWeight =
-                        FontWeight.Bold,
-                    modifier =
-                        Modifier
-                            .padding(top = 10.dp)
-                            .graphicsLayer {
-                                alpha = profileContentEntrance.value
-                                translationY = (1f - profileContentEntrance.value) * 16.dp.toPx()
-                            }
-                )
-                Spacer(
-                    modifier =
-                        Modifier.height(13.dp)
-                )
+                val personalityItems = profileDetailItems(match.personality)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
                         .graphicsLayer {
                             alpha = profileContentEntrance.value
                             translationY = (1f - profileContentEntrance.value) * 16.dp.toPx()
                         },
-                    horizontalArrangement =
-                        Arrangement.SpaceEvenly
+                    horizontalArrangement = Arrangement.spacedBy(7.dp)
                 ) {
-                    FavoriteActivity(
-                        icon = "💤",
-                        label = "Napping"
-                    )
-                    FavoriteActivity(
-                        icon = "🎾",
-                        label = "Playing"
-                    )
-                    FavoriteActivity(
-                        icon = "🍽",
-                        label = "Eating"
-                    )
-                    FavoriteActivity(
-                        icon = "🧭",
-                        label = "Exploring"
-                    )
+                    if (personalityItems.isEmpty()) {
+                        ProfileTag("Not added")
+                    } else {
+                        personalityItems.forEach { value -> ProfileTag(value) }
+                    }
                 }
-                Spacer(
-                    modifier =
-                        Modifier.height(15.dp)
+                Spacer(modifier = Modifier.height(15.dp))
+            }
+            item {
+                ProfileDivider()
+                Text(
+                    text = "Favorite Activities",
+                    color = TextDark,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier
+                        .padding(top = 10.dp)
+                        .graphicsLayer {
+                            alpha = profileContentEntrance.value
+                            translationY = (1f - profileContentEntrance.value) * 16.dp.toPx()
+                        }
                 )
+                Spacer(modifier = Modifier.height(13.dp))
+                val activityItems = profileDetailItems(match.activities)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .graphicsLayer {
+                            alpha = profileContentEntrance.value
+                            translationY = (1f - profileContentEntrance.value) * 16.dp.toPx()
+                        },
+                    horizontalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    if (activityItems.isEmpty()) {
+                        FavoriteActivity(icon = "•", label = "Not added")
+                    } else {
+                        activityItems.forEach { value ->
+                            FavoriteActivity(icon = activityIconFor(value), label = value)
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(15.dp))
+            }
+            item {
+                ProfileDetailSection("Health Info", match.health, "♥", profileContentEntrance.value)
+                Spacer(modifier = Modifier.height(15.dp))
+            }
+            item {
+                ProfileDetailSection("Looking For", match.lookingFor, "⌁", profileContentEntrance.value)
+                Spacer(modifier = Modifier.height(15.dp))
             }
             item {
                 Box(
@@ -7349,6 +7888,76 @@ fun CatProfileScreen(
         }
     }
 }
+private fun profileDetailItems(value: String): List<String> {
+    if (value.isBlank() || value.equals("Not added", ignoreCase = true)) return emptyList()
+    return value.split(Regex("[,;|\n]+" )).map { it.trim() }.filter { it.isNotBlank() }.distinct()
+}
+
+private fun activityIconFor(value: String): String = when {
+    value.contains("nap", true) || value.contains("sleep", true) -> "💤"
+    value.contains("play", true) || value.contains("toy", true) -> "🎾"
+    value.contains("eat", true) || value.contains("food", true) || value.contains("treat", true) -> "🍽"
+    value.contains("explor", true) || value.contains("walk", true) -> "🧭"
+    value.contains("groom", true) -> "✨"
+    else -> "🐾"
+}
+
+@Composable
+private fun DiscoverProfilePhoto(
+    photoUrl: String?,
+    initialBitmap: Bitmap?,
+    fallbackRes: Int,
+    contentDescription: String,
+    modifier: Modifier = Modifier
+) {
+    var bitmap by remember(photoUrl, initialBitmap) { mutableStateOf(initialBitmap) }
+    LaunchedEffect(photoUrl, initialBitmap) {
+        if (bitmap == null && !photoUrl.isNullOrBlank()) {
+            bitmap = PurrFectApi.fetchCatPhoto(photoUrl)
+        }
+    }
+    if (bitmap != null) {
+        Image(bitmap = bitmap!!.asImageBitmap(), contentDescription = contentDescription, modifier = modifier, contentScale = ContentScale.Crop)
+    } else {
+        Image(painter = painterResource(id = fallbackRes), contentDescription = contentDescription, modifier = modifier, contentScale = ContentScale.Crop)
+    }
+}
+
+@Composable
+private fun ProfileDetailSection(
+    title: String,
+    value: String,
+    icon: String,
+    entrance: Float
+) {
+    ProfileDivider()
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 10.dp)
+            .graphicsLayer {
+                alpha = entrance
+                translationY = (1f - entrance) * 16.dp.toPx()
+            }
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
+                    .size(34.dp)
+                    .clip(CircleShape)
+                    .background(purrFectColor(Color(0xFFFFEEF1), Color(0xFF302A46))),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(text = icon, color = Pink, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+            }
+            Spacer(modifier = Modifier.width(10.dp))
+            Text(text = title, color = TextDark, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+        }
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(text = if (value.isBlank()) "Not added" else value, color = TextGrey, fontSize = 14.sp, lineHeight = 21.sp)
+    }
+}
+
 @Composable
 fun ProfileDivider() {
     Spacer(
@@ -7442,6 +8051,8 @@ private fun CompatibilityHeartShape() = GenericShape { size, _ ->
 @Composable
 fun CompatibilityScreen(
     match: MatchItem,
+    currentCatPhotoUrl: String? = null,
+    currentCatPhotoBitmap: Bitmap? = null,
     onBack: () -> Unit
 ) {
     var likeTrigger by remember {
@@ -7573,31 +8184,43 @@ fun CompatibilityScreen(
                                     CompatibilityHeartShape()
                             )
                     ) {
-                        Image(
-                            painter =
-                                painterResource(
-                                    id = R.drawable.signcat
-                                ),
-                            contentDescription =
-                                "My cat",
+                        CatPhoto(
+                            photoUrl = currentCatPhotoUrl,
+                            initialBitmap = currentCatPhotoBitmap,
+                            contentDescription = "My cat",
                             modifier = Modifier
                                 .weight(1f)
                                 .fillMaxSize(),
-                            contentScale =
-                                ContentScale.Crop
+                            contentScale = ContentScale.Crop,
+                            fallback = {
+                                Image(
+                                    painter = painterResource(
+                                        id = R.drawable.signcat
+                                    ),
+                                    contentDescription = "My cat",
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentScale = ContentScale.Crop
+                                )
+                            }
                         )
-                        Image(
-                            painter =
-                                painterResource(
-                                    id = match.imageRes
-                                ),
-                            contentDescription =
-                                "${match.name} cat",
+                        CatPhoto(
+                            photoUrl = match.photoUrl,
+                            initialBitmap = match.photoBitmap,
+                            contentDescription = "${match.name} cat",
                             modifier = Modifier
                                 .weight(1f)
                                 .fillMaxSize(),
-                            contentScale =
-                                ContentScale.Crop
+                            contentScale = ContentScale.Crop,
+                            fallback = {
+                                Image(
+                                    painter = painterResource(
+                                        id = match.imageRes
+                                    ),
+                                    contentDescription = "${match.name} cat",
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentScale = ContentScale.Crop
+                                )
+                            }
                         )
                     }
                 }
@@ -7866,182 +8489,153 @@ fun ChatsScreen(
         mutableStateOf(true)
     }
 
+    // Keep the existing backend connection exactly as it is.
     LaunchedEffect(currentCatId) {
+        isLoading = true
         if (currentCatId > 0) {
             chats = PurrFectApi.getChatList(currentCatId)
+        } else {
+            chats = emptyList()
         }
         isLoading = false
     }
 
-    val filteredChats =
-        chats.filter {
-            it.name.contains(
-                searchText,
-                ignoreCase = true
-            ) ||
-                    it.message.contains(
-                        searchText,
-                        ignoreCase = true
-                    )
-        }
+    val filteredChats = chats.filter {
+        it.name.contains(searchText, ignoreCase = true) ||
+                it.message.contains(searchText, ignoreCase = true)
+    }
+
     Box(
         modifier = Modifier.fillMaxSize()
     ) {
-        if (!purrFectDarkMode) {
-            Image(
-                painter = painterResource(id = R.drawable.chatbg),
-                contentDescription = null,
-                modifier = Modifier.matchParentSize(),
-                contentScale = ContentScale.FillBounds
-            )
-        }
+        // Reference-matched chat background stored in res/drawable.
+        Image(
+            painter = painterResource(id = R.drawable.chat_screen_background),
+            contentDescription = null,
+            modifier = Modifier.fillMaxSize(),
+            contentScale = ContentScale.FillBounds
+        )
 
         Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(BackgroundColor)
+            modifier = Modifier.fillMaxSize()
         ) {
-            Row(
+            // Header matches the reference layout.
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(58.dp),
-                verticalAlignment =
-                    Alignment.CenterVertically
-            ) {
-                Box(
-                    modifier =
-                        Modifier.fillMaxWidth(),
-                    contentAlignment =
-                        Alignment.Center
-                ) {
-                    Text(
-                        text =
-                            "Chats",
-                        color =
-                            TextDark,
-                        fontSize =
-                            16.sp,
-                        fontWeight =
-                            FontWeight.Bold
+                    .padding(
+                        start = 18.dp,
+                        end = 18.dp,
+                        top = 7.dp,
+                        bottom = 7.dp
                     )
-                }
+            ) {
+                Text(
+                    text = "Chats",
+                    color = TextDark,
+                    fontSize = 23.sp,
+                    lineHeight = 27.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(
+                    modifier = Modifier.height(1.dp)
+                )
+                Text(
+                    text = "Talk, share and make new feline friends",
+                    color = TextGrey,
+                    fontSize = 11.sp,
+                    lineHeight = 15.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
             }
+
             OutlinedTextField(
-                value =
-                    searchText,
+                value = searchText,
                 onValueChange = {
                     searchText = it
                 },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(
-                        horizontal = 20.dp
-                    ),
+                    .height(51.dp)
+                    .padding(horizontal = 12.dp),
                 placeholder = {
                     Text(
-                        text =
-                            "Search chats...",
-                        color =
-                            TextGrey,
-                        fontSize =
-                            12.sp
+                        text = "Search chats...",
+                        color = TextGrey,
+                        fontSize = 11.sp
                     )
                 },
                 leadingIcon = {
                     Icon(
-                        imageVector =
-                            Icons.Outlined.Search,
-                        contentDescription =
-                            "Search",
-                        tint =
-                            TextGrey
+                        imageVector = Icons.Outlined.Search,
+                        contentDescription = "Search chats",
+                        tint = TextGrey,
+                        modifier = Modifier.size(18.dp)
                     )
                 },
-                singleLine =
-                    true,
-                shape =
-                    RoundedCornerShape(14.dp),
-                colors =
-                    OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor =
-                            Pink,
-                        unfocusedBorderColor =
-                            BorderColor,
-                        focusedContainerColor =
-                            CardColor,
-                        unfocusedContainerColor =
-                            CardColor,
-                        cursorColor =
-                            Pink
-                    )
+                singleLine = true,
+                shape = RoundedCornerShape(17.dp),
+                textStyle = androidx.compose.material3.LocalTextStyle.current.copy(
+                    fontSize = 11.sp,
+                    color = TextDark
+                ),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = Color(0xFFE9DCD8),
+                    unfocusedBorderColor = Color(0xFFE9DCD8),
+                    focusedContainerColor = Color(0xFFFFFEFD),
+                    unfocusedContainerColor = Color(0xFFFFFEFD),
+                    cursorColor = Pink
+                )
             )
+
             Spacer(
-                modifier =
-                    Modifier.height(12.dp)
+                modifier = Modifier.height(12.dp)
             )
-            if (filteredChats.isEmpty() && !isLoading) {
+
+            if (isLoading) {
                 Box(
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxWidth(),
-                    contentAlignment =
-                        Alignment.Center
+                    contentAlignment = Alignment.Center
                 ) {
-                    Column(
-                        horizontalAlignment =
-                            Alignment.CenterHorizontally
-                    ) {
-                        Icon(
-                            imageVector =
-                                Icons.Outlined.ChatBubbleOutline,
-                            contentDescription =
-                                null,
-                            tint =
-                                TextGrey,
-                            modifier =
-                                Modifier.size(45.dp)
-                        )
-                        Spacer(
-                            modifier =
-                                Modifier.height(10.dp)
-                        )
-                        Text(
-                            text =
-                                "No chats found",
-                            color =
-                                TextDark,
-                            fontSize =
-                                14.sp,
-                            fontWeight =
-                                FontWeight.SemiBold
-                        )
-                        Spacer(
-                            modifier =
-                                Modifier.height(4.dp)
-                        )
-                        Text(
-                            text =
-                                "Your conversations will appear here.",
-                            color =
-                                TextGrey,
-                            fontSize =
-                                11.sp
-                        )
-                    }
+                    CircularProgressIndicator(
+                        color = Pink,
+                        strokeWidth = 2.dp,
+                        modifier = Modifier.size(25.dp)
+                    )
+                }
+            } else if (filteredChats.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .padding(horizontal = 28.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    ChatEmptyState(
+                        filtered = searchText.isNotBlank()
+                    )
                 }
             } else {
                 LazyColumn(
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxWidth(),
-                    contentPadding =
-                        PaddingValues(
-                            top = 3.dp,
-                            bottom = 12.dp
-                        )
+                    contentPadding = PaddingValues(
+                        start = 8.dp,
+                        end = 8.dp,
+                        top = 1.dp,
+                        bottom = 8.dp
+                    ),
+                    verticalArrangement = Arrangement.spacedBy(9.dp)
                 ) {
                     items(
-                        filteredChats
+                        items = filteredChats,
+                        key = { chat ->
+                            "${chat.matchId}_${chat.otherCatId}_${chat.name}"
+                        }
                     ) { chat ->
                         ChatRow(
                             chat = chat,
@@ -8052,9 +8646,9 @@ fun ChatsScreen(
                     }
                 }
             }
+
             BottomNavigation(
-                selectedTab =
-                    2,
+                selectedTab = 2,
                 onTabSelected = {
                     onTabSelected(it)
                 }
@@ -8062,6 +8656,62 @@ fun ChatsScreen(
         }
     }
 }
+
+/* =========================================================
+CHAT EMPTY STATE
+========================================================= */
+@Composable
+private fun ChatEmptyState(
+    filtered: Boolean
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Box(
+            modifier = Modifier
+                .size(100.dp)
+                .clip(CircleShape)
+                .background(
+                    purrFectColor(
+                        Color(0xFFFFD9DE),
+                        Color(0xFF30233D)
+                    )
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = Icons.Outlined.ChatBubbleOutline,
+                contentDescription = null,
+                tint = Pink,
+                modifier = Modifier.size(44.dp)
+            )
+        }
+        Spacer(
+            modifier = Modifier.height(16.dp)
+        )
+        Text(
+            text = if (filtered) "No chats found" else "Your conversations appear here",
+            color = TextDark,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center
+        )
+        Spacer(
+            modifier = Modifier.height(6.dp)
+        )
+        Text(
+            text = if (filtered) {
+                "Try a different name or message."
+            } else {
+                "Start a chat and connect with amazing cat lovers!"
+            },
+            color = TextGrey,
+            fontSize = 11.sp,
+            textAlign = TextAlign.Center
+        )
+    }
+}
+
 /* =========================================================
 CHAT ROW
 ========================================================= */
@@ -8070,153 +8720,168 @@ fun ChatRow(
     chat: ChatItem,
     onClick: () -> Unit
 ) {
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(18.dp))
-            .background(if (purrFectDarkMode) CardColor else Color.Transparent)
-            .clickable(
-                onClick = onClick
+            .height(73.dp)
+            .clip(RoundedCornerShape(21.dp))
+            .background(
+                purrFectColor(
+                    Color(0xFFFFFEFD),
+                    Color(0xFF1B1830)
+                )
             )
+            .border(
+                width = 1.dp,
+                color = purrFectColor(
+                    Color(0xFFEFE0DC),
+                    Color(0xFF2C2741)
+                ),
+                shape = RoundedCornerShape(21.dp)
+            )
+            .clickable(onClick = onClick)
             .padding(
-                horizontal = 20.dp,
-                vertical = 10.dp
+                start = 11.dp,
+                end = 10.dp,
+                top = 9.dp,
+                bottom = 9.dp
             ),
-        verticalAlignment =
-            Alignment.CenterVertically
+        verticalAlignment = Alignment.CenterVertically
     ) {
         Box(
             modifier = Modifier
-                .size(58.dp)
+                .size(51.dp)
                 .clip(CircleShape)
                 .background(
-                    purrFectColor(Color(0xFFEDE4E0), Color(0xFF211E35))
+                    purrFectColor(
+                        Color(0xFFECE3DF),
+                        Color(0xFF211E35)
+                    )
                 ),
-            contentAlignment =
-                Alignment.Center
+            contentAlignment = Alignment.Center
         ) {
-            Icon(
-                imageVector =
-                    Icons.Outlined.Pets,
-                contentDescription =
-                    "Cat photo",
-                tint =
-                    TextGrey,
-                modifier =
-                    Modifier.size(25.dp)
+            CatPhoto(
+                photoUrl = chat.photoUrl,
+                initialBitmap = null,
+                contentDescription = "${chat.name} photo",
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(CircleShape),
+                fallback = {
+                    Icon(
+                        imageVector = Icons.Outlined.Pets,
+                        contentDescription = "Cat photo",
+                        tint = TextGrey,
+                        modifier = Modifier.size(25.dp)
+                    )
+                }
             )
+
+            // Keep the online status connection, but make the indicator subtle
+            // enough to match the reference card.
             if (chat.online) {
                 Box(
                     modifier = Modifier
-                        .size(13.dp)
-                        .align(
-                            Alignment.BottomEnd
-                        )
+                        .size(10.dp)
+                        .align(Alignment.BottomEnd)
                         .clip(CircleShape)
-                        .background(
-                            purrFectColor(Color(0xFF63B87A), Color(0xFF79E095))
-                        )
+                        .background(Color(0xFF68BE7D))
                         .border(
-                            2.dp,
-                            CardColor,
-                            CircleShape
+                            width = 2.dp,
+                            color = Color(0xFFFFFEFD),
+                            shape = CircleShape
                         )
-                ) { }
+                )
             }
         }
+
         Spacer(
-            modifier =
-                Modifier.width(13.dp)
+            modifier = Modifier.width(11.dp)
         )
+
         Column(
-            modifier =
-                Modifier.weight(1f)
+            modifier = Modifier
+                .weight(1f)
+                .padding(vertical = 1.dp)
         ) {
             Text(
-                text =
-                    chat.name,
-                color =
-                    TextDark,
-                fontSize =
-                    14.sp,
-                fontWeight =
-                    FontWeight.SemiBold
+                text = chat.name.ifBlank { "Cat" },
+                color = TextDark,
+                fontSize = 13.sp,
+                lineHeight = 16.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
+
             Spacer(
-                modifier =
-                    Modifier.height(4.dp)
+                modifier = Modifier.height(1.dp)
             )
+
             Text(
-                text =
-                    chat.message,
-                color =
-                    if (
-                        chat.unread > 0
-                    ) {
-                        TextDark
-                    } else {
-                        TextGrey
-                    },
-                fontSize =
-                    11.sp,
-                fontWeight =
-                    if (
-                        chat.unread > 0
-                    ) {
-                        FontWeight.SemiBold
-                    } else {
-                        FontWeight.Normal
-                    },
-                maxLines =
-                    1
+                text = chat.message.ifBlank { "" },
+                color = TextGrey,
+                fontSize = 11.sp,
+                lineHeight = 14.sp,
+                fontWeight = FontWeight.Normal,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
         }
+
+        Spacer(
+            modifier = Modifier.width(6.dp)
+        )
+
         Column(
-            horizontalAlignment =
-                Alignment.End
+            modifier = Modifier.width(27.dp),
+            horizontalAlignment = Alignment.End,
+            verticalArrangement = Arrangement.Center
         ) {
             Text(
-                text =
-                    chat.time,
-                color =
-                    if (
-                        chat.unread > 0
-                    ) {
-                        Pink
-                    } else {
-                        TextGrey
-                    },
-                fontSize =
-                    9.sp
+                // Keep the server-provided label/value exactly as returned.
+                text = chat.time.ifBlank { "" },
+                color = TextGrey,
+                fontSize = 8.sp,
+                lineHeight = 11.sp,
+                fontWeight = FontWeight.Normal,
+                maxLines = 1,
+                overflow = TextOverflow.Clip
             )
+
+            Spacer(
+                modifier = Modifier.height(3.dp)
+            )
+
             if (chat.unread > 0) {
-                Spacer(
-                    modifier =
-                        Modifier.height(6.dp)
-                )
                 Box(
                     modifier = Modifier
-                        .size(20.dp)
+                        .size(18.dp)
                         .clip(CircleShape)
-                        .background(
-                            Pink
-                        ),
-                    contentAlignment =
-                        Alignment.Center
+                        .background(Pink),
+                    contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text =
-                            chat.unread.toString(),
-                        color =
-                            Color.White,
-                        fontSize =
-                            9.sp,
-                        fontWeight =
-                            FontWeight.Bold
+                        text = chat.unread.toString(),
+                        color = Color.White,
+                        fontSize = 8.sp,
+                        fontWeight = FontWeight.Bold
                     )
                 }
+            } else {
+                Spacer(
+                    modifier = Modifier.height(18.dp)
+                )
             }
         }
+
+        Icon(
+            imageVector = Icons.Outlined.ChevronRight,
+            contentDescription = "Open chat",
+            tint = TextGrey,
+            modifier = Modifier.size(17.dp)
+        )
     }
 }
 /* =========================================================
@@ -8264,6 +8929,7 @@ fun IndividualChatScreen(
                         receiverCatId = chat.otherCatId,
                         message = marker
                     )
+                    PurrFectSoundManager.play(context, PREF_SOUND_MESSAGE, ToneGenerator.TONE_PROP_ACK)
                     messages.add(
                         ChatMessage(
                             text = name,
@@ -8435,6 +9101,7 @@ fun IndividualChatScreen(
                             scope.launch {
                                 try {
                                     PurrFectApi.sendMessage(chat.matchId, currentCatId, chat.otherCatId, textToSend)
+                                    PurrFectSoundManager.play(context, PREF_SOUND_MESSAGE, ToneGenerator.TONE_PROP_ACK)
                                     messages.add(ChatMessage(textToSend, true, formatChatTime(System.currentTimeMillis().toString())))
                                     messageText = ""
                                 } catch (e: Exception) {
@@ -8790,23 +9457,22 @@ fun MyCatScreen(
                         .size(92.dp)
                         .clip(CircleShape)
                 ) {
-                    if (profile.photoBitmap != null) {
-                        Image(
-                            bitmap = profile.photoBitmap.asImageBitmap(),
-                            contentDescription = "Cat photo",
-                            modifier = Modifier.fillMaxSize(),
-                            contentScale = ContentScale.Crop
-                        )
-                    } else {
-                        Image(
-                            painter = painterResource(
-                                id = R.drawable.simba
-                            ),
-                            contentDescription = "Cat photo",
-                            modifier = Modifier.fillMaxSize(),
-                            contentScale = ContentScale.Crop
-                        )
-                    }
+                    CatPhoto(
+                        photoUrl = profile.photoUrl,
+                        initialBitmap = profile.photoBitmap,
+                        contentDescription = "Cat photo",
+                        modifier = Modifier.fillMaxSize(),
+                        fallback = {
+                            Image(
+                                painter = painterResource(
+                                    id = R.drawable.simba
+                                ),
+                                contentDescription = "Cat photo",
+                                modifier = Modifier.fillMaxSize(),
+                                contentScale = ContentScale.Crop
+                            )
+                        }
+                    )
                 }
                 Spacer(
                     modifier =
@@ -9023,11 +9689,20 @@ fun MyCatProfilesScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Box(Modifier.size(72.dp).clip(CircleShape).background(purrFectColor(Color(0xFFFFE4E9), Color(0xFF211E35)))) {
-                            if (cat.photoBitmap != null) {
-                                Image(cat.photoBitmap.asImageBitmap(), cat.name, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-                            } else {
-                                Icon(Icons.Outlined.Pets, null, tint = purrFectColor(Color(0xFFE95270), Color(0xFFF45A9A)), modifier = Modifier.align(Alignment.Center).size(34.dp))
-                            }
+                            CatPhoto(
+                                photoUrl = cat.photoUrl,
+                                initialBitmap = cat.photoBitmap,
+                                contentDescription = cat.name,
+                                modifier = Modifier.fillMaxSize(),
+                                fallback = {
+                                    Icon(
+                                        Icons.Outlined.Pets,
+                                        null,
+                                        tint = purrFectColor(Color(0xFFE95270), Color(0xFFF45A9A)),
+                                        modifier = Modifier.align(Alignment.Center).size(34.dp)
+                                    )
+                                }
+                            )
                         }
                         Spacer(Modifier.width(14.dp))
                         Column(Modifier.weight(1f)) {
@@ -10073,6 +10748,16 @@ fun SettingsScreen(
     onAccountSecurity: () -> Unit,
     notificationsEnabled: Boolean,
     onNotificationsEnabledChange: (Boolean) -> Unit,
+    soundsEnabled: Boolean,
+    onSoundsEnabledChange: (Boolean) -> Unit,
+    soundMatchEnabled: Boolean,
+    onSoundMatchEnabledChange: (Boolean) -> Unit,
+    soundMessageEnabled: Boolean,
+    onSoundMessageEnabledChange: (Boolean) -> Unit,
+    soundLikeEnabled: Boolean,
+    onSoundLikeEnabledChange: (Boolean) -> Unit,
+    soundStarEnabled: Boolean,
+    onSoundStarEnabledChange: (Boolean) -> Unit,
     darkModeEnabled: Boolean,
     onDarkModeEnabledChange: (Boolean) -> Unit,
     distanceUnit: String,
@@ -10157,21 +10842,20 @@ fun SettingsScreen(
                             .clip(CircleShape)
                             .border(3.dp, purrFectColor(Color(0xFFFF6684), Color(0xFFF45A9A)), CircleShape)
                     ) {
-                        if (profile.photoBitmap != null) {
-                            Image(
-                                bitmap = profile.photoBitmap.asImageBitmap(),
-                                contentDescription = "Profile photo",
-                                modifier = Modifier.fillMaxSize(),
-                                contentScale = ContentScale.Crop
-                            )
-                        } else {
-                            Image(
-                                painter = painterResource(R.drawable.simba),
-                                contentDescription = "Profile photo",
-                                modifier = Modifier.fillMaxSize(),
-                                contentScale = ContentScale.Crop
-                            )
-                        }
+                        CatPhoto(
+                            photoUrl = profile.photoUrl,
+                            initialBitmap = profile.photoBitmap,
+                            contentDescription = "Profile photo",
+                            modifier = Modifier.fillMaxSize(),
+                            fallback = {
+                                Image(
+                                    painter = painterResource(R.drawable.simba),
+                                    contentDescription = "Profile photo",
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentScale = ContentScale.Crop
+                                )
+                            }
+                        )
                     }
                     Spacer(modifier = Modifier.width(15.dp))
                     Column(modifier = Modifier.weight(1f)) {
@@ -10241,6 +10925,58 @@ fun SettingsScreen(
                     subtitle = "Manage notification preferences",
                     onClick = onNotificationsPage
                 )
+                SettingsDivider()
+                SettingsSwitchRow(
+                    icon = Icons.Outlined.ChatBubbleOutline,
+                    iconColor = purrFectColor(Color(0xFF7952C8), Color(0xFF8A5BD1)),
+                    iconBackground = purrFectColor(Color(0xFFF0E5FF), Color(0xFF211E35)),
+                    title = "App Sounds",
+                    subtitle = "Play sounds for matches, likes, stars and messages",
+                    checked = soundsEnabled,
+                    onCheckedChange = onSoundsEnabledChange
+                )
+                if (soundsEnabled) {
+                    SettingsDivider()
+                    SettingsSwitchRow(
+                        icon = Icons.Outlined.FavoriteBorder,
+                        iconColor = purrFectColor(Color(0xFFE95270), Color(0xFFF45A9A)),
+                        iconBackground = purrFectColor(Color(0xFFFFE4E9), Color(0xFF211E35)),
+                        title = "Match Sound",
+                        subtitle = "Special sound when a match happens",
+                        checked = soundMatchEnabled,
+                        onCheckedChange = onSoundMatchEnabledChange
+                    )
+                    SettingsDivider()
+                    SettingsSwitchRow(
+                        icon = Icons.Outlined.ChatBubbleOutline,
+                        iconColor = purrFectColor(Color(0xFF7952C8), Color(0xFF8A5BD1)),
+                        iconBackground = purrFectColor(Color(0xFFF0E5FF), Color(0xFF211E35)),
+                        title = "Message Sound",
+                        subtitle = "Sound when a message is sent",
+                        checked = soundMessageEnabled,
+                        onCheckedChange = onSoundMessageEnabledChange
+                    )
+                    SettingsDivider()
+                    SettingsSwitchRow(
+                        icon = Icons.Outlined.FavoriteBorder,
+                        iconColor = purrFectColor(Color(0xFFE95270), Color(0xFFF45A9A)),
+                        iconBackground = purrFectColor(Color(0xFFFFE4E9), Color(0xFF211E35)),
+                        title = "Like Sound",
+                        subtitle = "Sound when you like a cat",
+                        checked = soundLikeEnabled,
+                        onCheckedChange = onSoundLikeEnabledChange
+                    )
+                    SettingsDivider()
+                    SettingsSwitchRow(
+                        icon = Icons.Outlined.StarBorder,
+                        iconColor = purrFectColor(Color(0xFFE8A23A), Color(0xFFFFC15A)),
+                        iconBackground = purrFectColor(Color(0xFFFFF2D6), Color(0xFF30283B)),
+                        title = "Star Sound",
+                        subtitle = "Sound when you star a cat",
+                        checked = soundStarEnabled,
+                        onCheckedChange = onSoundStarEnabledChange
+                    )
+                }
                 SettingsDivider()
                 SettingsSwitchRow(
                     icon = Icons.Outlined.DarkMode,
@@ -11984,16 +12720,15 @@ fun AdoptionScreen(
                                     .background(purrFectColor(Color(0xFFE9E0DE), Color(0xFF211E35))),
                                 contentAlignment = Alignment.Center
                             ) {
-                                if (cat.photoBitmap != null) {
-                                    Image(
-                                        bitmap = cat.photoBitmap.asImageBitmap(),
-                                        contentDescription = cat.name,
-                                        modifier = Modifier.fillMaxSize(),
-                                        contentScale = ContentScale.Crop
-                                    )
-                                } else {
-                                    Text("🐱", fontSize = 24.sp)
-                                }
+                                CatPhoto(
+                                    photoUrl = cat.photoUrl,
+                                    initialBitmap = cat.photoBitmap,
+                                    contentDescription = cat.name,
+                                    modifier = Modifier.fillMaxSize(),
+                                    fallback = {
+                                        Text("🐱", fontSize = 24.sp)
+                                    }
+                                )
                             }
 
                             Spacer(modifier = Modifier.width(16.dp))
@@ -12099,20 +12834,19 @@ fun AdoptionDetailsScreen(
                     .clip(RoundedCornerShape(32.dp))
                     .background(purrFectColor(Color(0xFFE0D8D6), Color(0xFF302A46)))
             ) {
-                if (cat.photoBitmap != null) {
-                    Image(
-                        bitmap = cat.photoBitmap.asImageBitmap(),
-                        contentDescription = cat.name,
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Crop
-                    )
-                } else {
-                    Text(
-                        text = "🐱",
-                        fontSize = 120.sp,
-                        modifier = Modifier.align(Alignment.Center)
-                    )
-                }
+                CatPhoto(
+                    photoUrl = cat.photoUrl,
+                    initialBitmap = cat.photoBitmap,
+                    contentDescription = cat.name,
+                    modifier = Modifier.fillMaxSize(),
+                    fallback = {
+                        Text(
+                            text = "🐱",
+                            fontSize = 120.sp,
+                            modifier = Modifier.align(Alignment.Center)
+                        )
+                    }
+                )
 
                 Box(
                     modifier = Modifier
@@ -12787,5 +13521,8 @@ fun NotificationsScreen(
         }
     }
 }
+
+
+
 
 
