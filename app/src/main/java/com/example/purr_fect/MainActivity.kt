@@ -1876,6 +1876,7 @@ fun PurrFectApp() {
     }
     var isPremiumLoading by remember { mutableStateOf(false) }
     var premiumPurchaseError by remember { mutableStateOf<String?>(null) }
+    var isPremiumActive by remember { mutableStateOf(false) }
     // Remembers where Edit Cat Profile was opened from so Back/Save
     // returns to the correct screen without changing existing navigation.
     var editReturnPage by remember {
@@ -2036,6 +2037,7 @@ fun PurrFectApp() {
                     val premiumEntitlement =
                         customerInfo.entitlements["purrfect_premium"]
                     val premiumActive = premiumEntitlement?.isActive == true
+                    isPremiumActive = premiumActive
 
                     Log.d(
                         "PurrFectRevenueCat",
@@ -3106,6 +3108,7 @@ fun PurrFectApp() {
                                     onSuccess = { _, customerInfo ->
                                         val premiumActive =
                                             customerInfo.entitlements["purrfect_premium"]?.isActive == true
+                                        isPremiumActive = premiumActive
 
                                         Log.d(
                                             "PurrFectRevenueCat",
