@@ -120,6 +120,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.Switch
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
@@ -158,6 +159,7 @@ import com.revenuecat.purchases.purchaseWith
 import com.revenuecat.purchases.interfaces.LogInCallback
 import com.revenuecat.purchases.interfaces.ReceiveOfferingsCallback
 import com.revenuecat.purchases.interfaces.ReceiveCustomerInfoCallback
+import com.revenuecat.purchases.interfaces.UpdatedCustomerInfoListener
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -197,7 +199,7 @@ where the Node.js backend is running on port 5000.
 ========================================================= */
 private const val PURR_FECT_API_BASE_URL = "http://localhost:5000"
 
-// RevenueCat public SDK key. Replace the placeholder with the test_ key
+// RevenueCat public SDK key.
 // from the PurrFect RevenueCat Android app settings.
 private const val REVENUECAT_API_KEY = "test_mggxsNIqVHmJYNhshDFFKJvTSen"
 data class BackendUser(
@@ -1657,12 +1659,21 @@ class MainActivity : ComponentActivity() {
 
         if (!revenueCatConfigured) {
             Purchases.logLevel = LogLevel.DEBUG
-            Purchases.configure(
+
+            // Use the already-saved PurrFect account ID when configuring RevenueCat.
+            // This prevents RevenueCat from starting this authenticated session as
+            // a new anonymous customer and then switching identities later.
+            val savedRevenueCatUserId = loadSavedUser(applicationContext)?.id?.toString()
+
+            val purchasesConfiguration =
                 PurchasesConfiguration.Builder(
                     applicationContext,
                     REVENUECAT_API_KEY
-                ).build()
-            )
+                )
+                    .appUserID(savedRevenueCatUserId)
+                    .build()
+
+            Purchases.configure(purchasesConfiguration)
             revenueCatConfigured = true
         }
 
@@ -1919,6 +1930,28 @@ fun PurrFectApp() {
     }
     var loggedInUser by remember {
         mutableStateOf<BackendUser?>(savedUser)
+    }
+
+    // Checkpoint 8: keep Premium state synchronized whenever RevenueCat
+    // receives updated CustomerInfo during the app lifecycle.
+    DisposableEffect(loggedInUser?.id) {
+        val customerInfoListener = UpdatedCustomerInfoListener { customerInfo ->
+            val premiumActive =
+                customerInfo.entitlements["purrfect_premium"]?.isActive == true
+
+            isPremiumActive = premiumActive
+
+            Log.d(
+                "PurrFectRevenueCat",
+                "CustomerInfo listener: Premium entitlement active: $premiumActive"
+            )
+        }
+
+        Purchases.sharedInstance.updatedCustomerInfoListener = customerInfoListener
+
+        onDispose {
+            Purchases.sharedInstance.removeUpdatedCustomerInfoListener()
+        }
     }
     var settingsNotificationsEnabled by remember {
         mutableStateOf(
