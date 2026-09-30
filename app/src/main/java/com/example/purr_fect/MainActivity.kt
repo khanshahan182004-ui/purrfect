@@ -157,6 +157,7 @@ import com.revenuecat.purchases.PurchaseParams
 import com.revenuecat.purchases.purchaseWith
 import com.revenuecat.purchases.interfaces.LogInCallback
 import com.revenuecat.purchases.interfaces.ReceiveOfferingsCallback
+import com.revenuecat.purchases.interfaces.ReceiveCustomerInfoCallback
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -2046,6 +2047,34 @@ fun PurrFectApp() {
                     Log.d(
                         "PurrFectRevenueCat",
                         "Premium entitlement active: $premiumActive"
+                    )
+
+                    // Checkpoint 7: explicitly refresh CustomerInfo after the
+                    // PurrFect account has been identified. Because PurrFect uses
+                    // its own stable App User ID, this is the appropriate way to
+                    // refresh entitlement state instead of automatically calling
+                    // restorePurchases() at app launch.
+                    Purchases.sharedInstance.getCustomerInfo(
+                        object : ReceiveCustomerInfoCallback {
+                            override fun onReceived(refreshedCustomerInfo: CustomerInfo) {
+                                val refreshedPremiumActive =
+                                    refreshedCustomerInfo.entitlements["purrfect_premium"]?.isActive == true
+
+                                isPremiumActive = refreshedPremiumActive
+
+                                Log.d(
+                                    "PurrFectRevenueCat",
+                                    "RevenueCat CustomerInfo refreshed: premium entitlement active: $refreshedPremiumActive"
+                                )
+                            }
+
+                            override fun onError(error: PurchasesError) {
+                                Log.e(
+                                    "PurrFectRevenueCat",
+                                    "RevenueCat CustomerInfo refresh failed: ${error.message}"
+                                )
+                            }
+                        }
                     )
 
                     // Checkpoint 4B: fetch the RevenueCat default offering
