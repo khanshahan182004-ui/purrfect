@@ -51,14 +51,15 @@ dependencies {
     implementation("androidx.compose.ui:ui:1.8.3")
     implementation("androidx.compose.ui:ui-tooling-preview:1.8.3")
 
-
     // Google Sign-In
     implementation("androidx.credentials:credentials:1.3.0")
     implementation("androidx.credentials:credentials-play-services-auth:1.3.0")
     implementation("com.google.android.libraries.identity.googleid:googleid:1.1.1")
 
-
     implementation("androidx.compose.material3:material3:1.3.2")
+
+    // RevenueCat
+    implementation("com.revenuecat.purchases:purchases:10.15.1")
 
     // Material Icons
     implementation("androidx.compose.material:material-icons-extended:1.7.8")
