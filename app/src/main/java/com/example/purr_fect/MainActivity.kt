@@ -1,4 +1,4 @@
-package com.example.purr_fect
+package com.purrfect.app
 import android.content.Intent
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -199,9 +199,9 @@ where the Node.js backend is running on port 5000.
 ========================================================= */
 private const val PURR_FECT_API_BASE_URL = "http://localhost:5000"
 
-// RevenueCat public SDK key. Replace the placeholder with the test_ key
-// from the PurrFect RevenueCat Android app settings.
-private const val REVENUECAT_API_KEY = "test_mggxsNIqVHmJYNhshDFFKJvTSen"
+// RevenueCat production public SDK key for the PurrFect Google Play app.
+
+private const val REVENUECAT_API_KEY = "goog_QfKArpQoDdyasdiuQufXfOxYlpq"
 data class BackendUser(
     val id: Int,
     val name: String,

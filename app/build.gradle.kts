@@ -4,18 +4,18 @@ plugins {
 }
 
 android {
-    namespace = "com.example.purr_fect"
+    namespace = "com.purrfect.app"
 
     compileSdk {
         version = release(37)
     }
 
     defaultConfig {
-        applicationId = "com.example.purr_fect"
+        applicationId = "com.purrfect.app"
         minSdk = 24
         targetSdk = 37
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.0.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -39,7 +39,6 @@ android {
 }
 
 dependencies {
-
     implementation(libs.androidx.activity.ktx)
     implementation(libs.androidx.appcompat)
     implementation(libs.androidx.constraintlayout)
@@ -67,7 +66,6 @@ dependencies {
     debugImplementation("androidx.compose.ui:ui-tooling:1.8.3")
 
     testImplementation(libs.junit)
-
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(libs.androidx.junit)
 }
